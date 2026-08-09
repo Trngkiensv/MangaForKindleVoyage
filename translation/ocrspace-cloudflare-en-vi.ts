@@ -444,12 +444,42 @@ export class EnglishVietnameseTranslationService {
     return null;
   }
 
+  private isLikelyNonTranslatableSource(source: string): boolean {
+    const raw = cleanText(source);
+    if (!raw) return true;
+
+    // URLs, email addresses, and bare hostnames should stay unchanged.
+    if (/^(?:https?:\/\/|www\.)\S+$/i.test(raw)) return true;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return true;
+
+    // A single token is often a name, place, acronym, number, or SFX label.
+    // The old echo detector already ignored most one-word output, so keep that behavior.
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    if (tokens.length <= 1) return true;
+
+    // Two-token title-cased names such as "Shoto Shirabishi" are expected to
+    // survive translation unchanged. Do not treat that as a failed translation.
+    // Also allow an initial + title-cased noun, e.g. "K University".
+    if (tokens.length === 2) {
+      const titleWord = /^[A-Z][A-Za-z'’-]+$/;
+      const initial = /^[A-Z]\.?$/;
+      if (titleWord.test(tokens[0]) && titleWord.test(tokens[1])) return true;
+      if (initial.test(tokens[0]) && titleWord.test(tokens[1])) return true;
+    }
+
+    return false;
+  }
+
   private looksUntranslated(source: string, translated: string): boolean {
     const normalize = (value: string) => cleanText(value).toLowerCase().replace(/[^a-z0-9\u00c0-\u024f\u1e00-\u1eff]+/g, ' ').trim();
     const sourceNormalized = normalize(source);
     const translatedNormalized = normalize(translated);
     if (!sourceNormalized || !translatedNormalized) return false;
-    if (sourceNormalized === translatedNormalized && sourceNormalized.split(/\s+/).length >= 2) return true;
+
+    if (sourceNormalized === translatedNormalized) {
+      if (this.isLikelyNonTranslatableSource(source)) return false;
+      if (sourceNormalized.split(/\s+/).length >= 2) return true;
+    }
 
     const sourceWords = sourceNormalized.split(/\s+/).filter(Boolean);
     const translatedWords = translatedNormalized.split(/\s+/).filter(Boolean);
@@ -674,7 +704,17 @@ export class EnglishVietnameseTranslationService {
         cursor += 1;
         if (missingIndex >= missing.length) return;
         const index = missing[missingIndex];
-        output[index] = await this.translateOneFallback(sourceTexts[index]);
+        try {
+          output[index] = await this.translateOneFallback(sourceTexts[index]);
+        } catch (error: any) {
+          // One difficult OCR region must never make the whole manga page fail.
+          // Keep the original text for that region and preserve translations that
+          // succeeded elsewhere on the page.
+          console.warn(
+            `Translation fallback failed for region ${index}; keeping source text: ${error?.message || error}`,
+          );
+          output[index] = sourceTexts[index];
+        }
       }
     };
     const workers: Promise<void>[] = [];

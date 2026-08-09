@@ -1579,7 +1579,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v16 started. VI defaults OFF; translation queue is cancelable. Testing local API...", false);
+        setStatus("ES5 v17 started. VI defaults OFF; translation queue is cancelable. Testing local API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
