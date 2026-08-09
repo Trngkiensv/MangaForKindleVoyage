@@ -1,0 +1,96 @@
+diff -ruN /mnt/data/kindle_v8_baseline/README_KINDLE_ES5.md /mnt/data/kindle_v8/README_KINDLE_ES5.md
+--- /mnt/data/kindle_v8_baseline/README_KINDLE_ES5.md	2026-08-08 17:26:29.000000000 +0000
++++ /mnt/data/kindle_v8/README_KINDLE_ES5.md	2026-08-08 17:41:18.396309025 +0000
+@@ -72,3 +72,10 @@
+ The modern React view also pages chapter feeds (60 releases per page). E-ink mode
+ caps image preloading at one next page, and resuming a history item loads only that
+ chapter instead of fetching hundreds of chapter records first.
++
++
++## Voyage ES5 v8 reader behavior
++
++- Reader control toggle is taller for easier touch use.
++- Zoom +/- changes by 10 percentage points per press.
++- Page images are hidden while a new image loads and are revealed only after the saved fit/zoom is applied, preventing the brief 100% -> custom zoom flash on old Kindle WebKit.
+diff -ruN /mnt/data/kindle_v8_baseline/public/kindle-voyage.css /mnt/data/kindle_v8/public/kindle-voyage.css
+--- /mnt/data/kindle_v8_baseline/public/kindle-voyage.css	2026-08-08 17:25:07.000000000 +0000
++++ /mnt/data/kindle_v8/public/kindle-voyage.css	2026-08-08 17:41:18.396214114 +0000
+@@ -39,7 +39,7 @@
+ .chapter-summary { border: 2px solid #000; padding: 8px; margin: 6px 0; font-size: 13px; }
+ .reader { padding: 0; margin: 0; text-align: center; width: 100%; }
+ .reader-control-shell { width: 100%; margin: 0; padding: 0; background: #fff; border-bottom: 2px solid #000; }
+-.reader-panel-toggle { display: block; width: 100%; min-height: 42px; border: 0; border-bottom: 1px solid #000; background: #000; color: #fff; padding: 8px 6px; margin: 0; font-size: 17px; font-weight: bold; text-align: center; }
++.reader-panel-toggle { display: block; width: 100%; min-height: 58px; border: 0; border-bottom: 1px solid #000; background: #000; color: #fff; padding: 14px 8px; margin: 0; font-size: 18px; line-height: 24px; font-weight: bold; text-align: center; }
+ .reader-panel-toggle-open { background: #fff; color: #000; border: 2px solid #000; }
+ .reader-panel-body { display: none; width: 100%; padding: 5px 4px 7px 4px; background: #fff; }
+ .reader-panel-row { margin: 3px 0; }
+diff -ruN /mnt/data/kindle_v8_baseline/public/kindle-voyage.html /mnt/data/kindle_v8/public/kindle-voyage.html
+--- /mnt/data/kindle_v8_baseline/public/kindle-voyage.html	2026-08-08 17:25:07.000000000 +0000
++++ /mnt/data/kindle_v8/public/kindle-voyage.html	2026-08-08 17:41:18.396269296 +0000
+@@ -7,13 +7,13 @@
+   <meta http-equiv="Pragma" content="no-cache">
+   <meta http-equiv="Expires" content="0">
+   <title>Kindle Voyage Manga Reader</title>
+-  <link rel="stylesheet" href="/kindle-voyage.css?v=7">
++  <link rel="stylesheet" href="/kindle-voyage.css?v=8">
+ </head>
+ <body>
+   <div id="app">
+     <div class="topbar">
+       <div class="brand">Kindle Manga</div>
+-      <div class="sub">Voyage ES5 v7 - jump paging + collapsible reader controls</div>
++      <div class="sub">Voyage ES5 v8 - stable zoom page loading</div>
+       <div class="row">
+         <input id="search" class="searchbox" type="text" value="" placeholder="Manga title or supported ID">
+         <button id="searchBtn" class="btn btn-dark" type="button">Search</button>
+@@ -62,6 +62,6 @@
+       }, 2500);
+     }());
+   </script>
+-  <script type="text/javascript" src="/kindle-voyage.js?v=7"></script>
++  <script type="text/javascript" src="/kindle-voyage.js?v=8"></script>
+ </body>
+ </html>
+diff -ruN /mnt/data/kindle_v8_baseline/public/kindle-voyage.js /mnt/data/kindle_v8/public/kindle-voyage.js
+--- /mnt/data/kindle_v8_baseline/public/kindle-voyage.js	2026-08-08 17:25:07.000000000 +0000
++++ /mnt/data/kindle_v8/public/kindle-voyage.js	2026-08-08 17:41:18.396062229 +0000
+@@ -807,14 +807,20 @@
+             applyReaderFit();
+             updateReaderControls();
+         };
+-        el("zoomOut").onclick = function () { changeZoom(-25); };
+-        el("zoomIn").onclick = function () { changeZoom(25); };
++        el("zoomOut").onclick = function () { changeZoom(-10); };
++        el("zoomIn").onclick = function () { changeZoom(10); };
+         el("qualityBtn").onclick = toggleQuality;
+         el("pageImage").onclick = function () { nextPage(); };
+         el("pageImage").onerror = function () {
+             setStatus("Image failed. Try switching Saver/HQ or press Next.", true);
+         };
+-        el("pageImage").onload = function () { applyReaderFit(); };
++        el("pageImage").onload = function () {
++            // Keep the new page hidden until its final fit/zoom has been
++            // applied. Old Kindle WebKit can otherwise paint the image at its
++            // intrinsic/default size for a moment before JavaScript resizes it.
++            applyReaderFit();
++            this.style.visibility = "visible";
++        };
+         window.onresize = function () {
+             if (document.body.className === "reader-active") applyReaderFit();
+         };
+@@ -967,8 +973,13 @@
+         counter.innerHTML = "Page " + (state.pageIndex + 1) + " / " + count;
+         if (titleNode) titleNode.innerHTML = escapeHtml(currentChapterLabel());
+         url = currentPageUrl(state.pageIndex);
+-        img.style.width = "auto";
+-        img.style.height = "auto";
++
++        // Do not reset width/height to auto here. On the Voyage that causes a
++        // visible 100% -> saved zoom jump while the next page is loading.
++        // Hide the image, preserve/apply the requested fit first, then reveal
++        // it only from onload after the final dimensions are known.
++        img.style.visibility = "hidden";
++        applyReaderFit();
+         img.removeAttribute("src");
+         img.src = url;
+         savePageProgress();

@@ -1,0 +1,554 @@
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/public/kindle-voyage.js	2026-08-08 02:10:10.000000000 +0000
++++ public/kindle-voyage.js	2026-08-08 12:37:15.828110802 +0000
+@@ -4,8 +4,6 @@
+     var state = {
+         currentManga: null,
+         chapters: [],
+-        groupFilter: "all",
+-        languageFilter: "all",
+         currentChapter: null,
+         currentChapterId: "",
+         pagesSaver: [],
+@@ -339,120 +337,12 @@
+         leaveReaderMode();
+         state.currentManga = manga;
+         state.chapters = [];
+-        state.groupFilter = "all";
+-        state.languageFilter = "all";
+         renderMangaDetail(manga, true);
+         loadChapters(manga.id);
+     }
+ 
+-    function getChapterGroups(chapter) {
+-        var rels =
+-            chapter && chapter.relationships ? chapter.relationships : [];
+-        var groups = [];
+-        var i, rel, name;
+-        for (i = 0; i < rels.length; i += 1) {
+-            rel = rels[i];
+-            if (rel && rel.type === "scanlation_group") {
+-                name =
+-                    rel.attributes && rel.attributes.name
+-                        ? rel.attributes.name
+-                        : "Group " + text(rel.id).substring(0, 8);
+-                groups.push({ id: rel.id || "", name: name });
+-            }
+-        }
+-        return groups;
+-    }
+-
+-    function getGroupLabel(chapter) {
+-        var groups = getChapterGroups(chapter);
+-        var names = [];
+-        var i;
+-        for (i = 0; i < groups.length; i += 1) names.push(groups[i].name);
+-        return names.length ? names.join(" + ") : "No scanlation group";
+-    }
+-
+-    function getGroupOptions(chapters) {
+-        var map = {};
+-        var list = [];
+-        var i, j, groups, key;
+-        for (i = 0; i < chapters.length; i += 1) {
+-            groups = getChapterGroups(chapters[i]);
+-            if (!groups.length) {
+-                key = "__none__";
+-                if (!map[key]) {
+-                    map[key] = {
+-                        id: key,
+-                        name: "No scanlation group",
+-                        count: 0,
+-                    };
+-                    list.push(map[key]);
+-                }
+-                map[key].count += 1;
+-            } else {
+-                for (j = 0; j < groups.length; j += 1) {
+-                    key = groups[j].id || "name:" + groups[j].name;
+-                    if (!map[key]) {
+-                        map[key] = { id: key, name: groups[j].name, count: 0 };
+-                        list.push(map[key]);
+-                    }
+-                    map[key].count += 1;
+-                }
+-            }
+-        }
+-        list.sort(function (a, b) {
+-            var an = a.name.toLowerCase();
+-            var bn = b.name.toLowerCase();
+-            if (an < bn) return -1;
+-            if (an > bn) return 1;
+-            return 0;
+-        });
+-        return list;
+-    }
+-
+-    function getLanguageOptions(chapters) {
+-        var map = {};
+-        var list = [];
+-        var i, a, lang;
+-        for (i = 0; i < chapters.length; i += 1) {
+-            a = chapters[i].attributes || {};
+-            lang = a.translatedLanguage || a.language || "unknown";
+-            if (!map[lang]) {
+-                map[lang] = { id: lang, count: 0 };
+-                list.push(map[lang]);
+-            }
+-            map[lang].count += 1;
+-        }
+-        list.sort(function (a, b) {
+-            if (a.id < b.id) return -1;
+-            if (a.id > b.id) return 1;
+-            return 0;
+-        });
+-        return list;
+-    }
+-
+-    function chapterMatchesGroup(chapter, groupId) {
+-        var groups, i;
+-        if (groupId === "all") return true;
+-        groups = getChapterGroups(chapter);
+-        if (groupId === "__none__") return groups.length === 0;
+-        for (i = 0; i < groups.length; i += 1)
+-            if (groups[i].id === groupId) return true;
+-        return false;
+-    }
+-
+-    function getFilteredChapters() {
+-        var out = [];
+-        var i, ch, a, lang;
+-        for (i = 0; i < state.chapters.length; i += 1) {
+-            ch = state.chapters[i];
+-            a = ch.attributes || {};
+-            lang = a.translatedLanguage || a.language || "unknown";
+-            if (!chapterMatchesGroup(ch, state.groupFilter)) continue;
+-            if (state.languageFilter !== "all" && lang !== state.languageFilter)
+-                continue;
+-            out.push(ch);
+-        }
+-        return out;
++    function getVisibleChapters() {
++        return state.chapters || [];
+     }
+ 
+     function getChapterStats(chapters) {
+@@ -479,71 +369,14 @@
+         };
+     }
+ 
+-    function renderFilterControls() {
+-        var groups = getGroupOptions(state.chapters);
+-        var langs = getLanguageOptions(state.chapters);
+-        var html = '<div class="filter-box">';
+-        var i, selected;
+-        html += '<div class="filter-label">Translator / scanlation group</div>';
+-        html += '<select id="groupFilter" class="filter-select">';
+-        selected = state.groupFilter === "all" ? ' selected="selected"' : "";
+-        html +=
+-            '<option value="all"' +
+-            selected +
+-            ">All translators (" +
+-            state.chapters.length +
+-            ")</option>";
+-        for (i = 0; i < groups.length; i += 1) {
+-            selected =
+-                state.groupFilter === groups[i].id
+-                    ? ' selected="selected"'
+-                    : "";
+-            html +=
+-                '<option value="' +
+-                escapeHtml(groups[i].id) +
+-                '"' +
+-                selected +
+-                ">" +
+-                escapeHtml(groups[i].name) +
+-                " (" +
+-                groups[i].count +
+-                ")</option>";
+-        }
+-        html += "</select>";
+-        html += '<div class="filter-label">Language</div>';
+-        html += '<select id="languageFilter" class="filter-select">';
+-        selected = state.languageFilter === "all" ? ' selected="selected"' : "";
+-        html += '<option value="all"' + selected + ">All languages</option>";
+-        for (i = 0; i < langs.length; i += 1) {
+-            selected =
+-                state.languageFilter === langs[i].id
+-                    ? ' selected="selected"'
+-                    : "";
+-            html +=
+-                '<option value="' +
+-                escapeHtml(langs[i].id) +
+-                '"' +
+-                selected +
+-                ">" +
+-                escapeHtml(langs[i].id.toUpperCase()) +
+-                " (" +
+-                langs[i].count +
+-                ")</option>";
+-        }
+-        html += "</select>";
+-        html += "</div>";
+-        return html;
+-    }
+-
+     function renderMangaDetail(manga, loadingChapters) {
+         leaveReaderMode();
+         var title = getTitle(manga);
+         var desc = getDescription(manga);
+         var cover = getCover(manga);
+         var saved = isSaved(manga.id);
+-        var filtered = getFilteredChapters();
++        var visibleChapters = getVisibleChapters();
+         var allStats = getChapterStats(state.chapters);
+-        var filteredStats = getChapterStats(filtered);
+         var html = '<div class="heading">' + escapeHtml(title) + "</div>";
+         if (cover)
+             html +=
+@@ -572,16 +405,7 @@
+                     " &nbsp; <b>Latest:</b> Ch. " +
+                     escapeHtml(allStats.highest);
+             html += "</div>";
+-            html += renderFilterControls();
+-            if (state.groupFilter !== "all" || state.languageFilter !== "all") {
+-                html +=
+-                    '<div class="chapter-filter-summary">Showing ' +
+-                    filteredStats.unique +
+-                    " chapter numbers / " +
+-                    filteredStats.releases +
+-                    " releases.</div>";
+-            }
+-            html += renderChapterHtml(filtered);
++            html += renderChapterHtml(visibleChapters);
+         }
+         showHtml(html);
+         el("backHome").onclick = loadHome;
+@@ -589,7 +413,7 @@
+             toggleSaved(manga);
+             renderMangaDetail(manga, false);
+         };
+-        if (!loadingChapters) bindChapterControls();
++        if (!loadingChapters) bindChapterButtons();
+     }
+ 
+     function chapterFeedUrl(mangaId, offset) {
+@@ -598,7 +422,7 @@
+             encodeURIComponent(mangaId) +
+             "/feed?limit=100&offset=" +
+             offset +
+-            "&includes%5B%5D=scanlation_group&order%5Bchapter%5D=desc&contentRating%5B%5D=safe&contentRating%5B%5D=suggestive&contentRating%5B%5D=erotica"
++            "&order%5Bchapter%5D=desc&contentRating%5B%5D=safe&contentRating%5B%5D=suggestive&contentRating%5B%5D=erotica"
+         );
+     }
+ 
+@@ -667,16 +491,15 @@
+ 
+     function renderChapterHtml(chapters) {
+         var html = "";
+-        var i, ch, a, label, lang, groupLabel, external;
++        var i, ch, a, label, lang, external;
+         if (!chapters || !chapters.length)
+-            return '<div class="notice">No chapters match this translator/language filter.</div>';
++            return '<div class="notice">No chapters found.</div>';
+         for (i = 0; i < chapters.length; i += 1) {
+             ch = chapters[i];
+             a = ch.attributes || {};
+             label = a.chapter ? "Ch. " + a.chapter : "Oneshot";
+             if (a.title) label += ": " + a.title;
+             lang = a.translatedLanguage || a.language || "";
+-            groupLabel = getGroupLabel(ch);
+             external = a.externalUrl ? " [External]" : "";
+             html +=
+                 '<button type="button" class="chapter chapter-open" data-index="' +
+@@ -687,36 +510,19 @@
+                 escapeHtml(label) +
+                 external +
+                 "</span>";
+-            html +=
+-                '<span class="chapter-meta">' +
+-                (lang ? escapeHtml(lang.toUpperCase()) + " - " : "") +
+-                escapeHtml(groupLabel) +
+-                "</span>";
++            if (lang) {
++                html +=
++                    '<span class="chapter-meta">' +
++                    escapeHtml(lang.toUpperCase()) +
++                    "</span>";
++            }
+             html += "</button>";
+         }
+         return html;
+     }
+ 
+-    function bindChapterControls() {
+-        var groupSelect = el("groupFilter");
+-        var languageSelect = el("languageFilter");
+-        if (groupSelect) {
+-            groupSelect.onchange = function () {
+-                state.groupFilter = groupSelect.value || "all";
+-                renderMangaDetail(state.currentManga, false);
+-            };
+-        }
+-        if (languageSelect) {
+-            languageSelect.onchange = function () {
+-                state.languageFilter = languageSelect.value || "all";
+-                renderMangaDetail(state.currentManga, false);
+-            };
+-        }
+-        bindChapterButtons();
+-    }
+-
+     function bindChapterButtons() {
+-        var chapters = getFilteredChapters();
++        var chapters = getVisibleChapters();
+         var buttons = document.getElementsByTagName("button");
+         var i, b, idx;
+         for (i = 0; i < buttons.length; i += 1) {
+@@ -863,8 +669,7 @@
+             state.currentChapter && state.currentChapter.attributes
+                 ? state.currentChapter.attributes
+                 : {};
+-        var label = a.chapter ? "Ch. " + a.chapter : "Oneshot";
+-        return label + " - " + getGroupLabel(state.currentChapter);
++        return a.chapter ? "Ch. " + a.chapter : "Oneshot";
+     }
+ 
+     function renderReader() {
+@@ -1160,7 +965,6 @@
+             mangaTitle: manga ? getTitle(manga) : "Manga",
+             chapterId: chapter.id,
+             chapter: a.chapter || "",
+-            translator: getGroupLabel(chapter),
+             when: new Date().getTime(),
+         };
+         var i;
+@@ -1182,7 +986,6 @@
+             label =
+                 list[i].mangaTitle +
+                 (list[i].chapter ? " - Ch. " + list[i].chapter : "");
+-            if (list[i].translator) label += " - " + list[i].translator;
+             html +=
+                 '<button type="button" class="chapter history-open" data-id="' +
+                 escapeHtml(list[i].mangaId) +
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/public/kindle-voyage.html	2026-08-08 01:43:28.000000000 +0000
++++ public/kindle-voyage.html	2026-08-08 12:36:34.999939806 +0000
+@@ -13,7 +13,7 @@
+   <div id="app">
+     <div class="topbar">
+       <div class="brand">Kindle Manga</div>
+-      <div class="sub">Voyage ES5 v3 - translator filters, chapter counts, fit/zoom reader</div>
++      <div class="sub">Voyage ES5 v3 - simple chapter list, chapter counts, fit/zoom reader</div>
+       <div class="row">
+         <input id="search" class="searchbox" type="text" value="" placeholder="Manga title or MangaDex ID">
+         <button id="searchBtn" class="btn btn-dark" type="button">Search</button>
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/public/kindle-voyage.css	2026-08-08 02:10:16.000000000 +0000
++++ public/kindle-voyage.css	2026-08-08 12:36:35.000241884 +0000
+@@ -37,10 +37,6 @@
+ .chapter-main { display: block; font-weight: bold; font-size: 15px; }
+ .chapter-meta { display: block; font-size: 12px; margin-top: 3px; font-weight: normal; }
+ .chapter-summary { border: 2px solid #000; padding: 8px; margin: 6px 0; font-size: 13px; }
+-.chapter-filter-summary { padding: 5px 2px; font-size: 12px; font-weight: bold; }
+-.filter-box { border: 2px solid #000; padding: 8px; margin: 8px 0; background: #fff; }
+-.filter-label { font-size: 12px; font-weight: bold; margin: 3px 0; }
+-.filter-select { display: block; width: 100%; min-height: 38px; border: 2px solid #000; background: #fff; color: #000; font-size: 15px; padding: 4px; margin: 0 0 8px 0; }
+ .reader { padding: 0; margin: 0; text-align: center; width: 100%; }
+ .reader-toolbar { border-bottom: 2px solid #000; padding: 3px 2px; text-align: center; background: #fff; }
+ .reader-controls { border-bottom: 1px solid #000; padding: 2px 1px; text-align: center; background: #fff; white-space: normal; }
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/src/App.tsx	2026-08-08 01:17:02.000000000 +0000
++++ src/App.tsx	2026-08-08 12:36:35.000950915 +0000
+@@ -65,7 +65,6 @@
+         title: q || undefined,
+         limit,
+         offset,
+-        availableTranslatedLanguage: settings.preferredLanguages,
+         order: orderObj,
+       });
+ 
+@@ -147,7 +146,7 @@
+     try {
+       setLoadingList(true);
+       // Fetch chapter feed for this manga so user can navigate chapters
+-      const feed = await getMangaFeed(mangaId, settings.preferredLanguages, 200);
++      const feed = await getMangaFeed(mangaId, [], 200);
+       setSelectedChapterId(chapterId);
+       setActiveChapterList(feed.data);
+       setCurrentView('reader');
+@@ -279,7 +278,7 @@
+               <>
+                 {mangaList.length === 0 ? (
+                   <div className="py-16 text-center text-xs font-bold text-stone-500">
+-                    No manga found. Try adjusting your search query or language preferences in Settings.
++                    No manga found. Try adjusting your search query.
+                   </div>
+                 ) : (
+                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/src/components/MangaDetail.tsx	2026-08-08 01:17:02.000000000 +0000
++++ src/components/MangaDetail.tsx	2026-08-08 12:36:35.000518244 +0000
+@@ -8,7 +8,7 @@
+   getMangaTitle,
+ } from '../services/mangadex';
+ import { isBookmarked, toggleBookmark, getMangaProgress } from '../services/storage';
+-import { ArrowLeft, BookmarkCheck, BookmarkPlus, BookOpen, Globe, RefreshCw, Search, Sparkles } from 'lucide-react';
++import { ArrowLeft, BookmarkCheck, BookmarkPlus, BookOpen, RefreshCw, Search, Sparkles } from 'lucide-react';
+ 
+ interface MangaDetailProps {
+   manga: Manga;
+@@ -35,7 +35,6 @@
+   const [chapters, setChapters] = useState<Chapter[]>([]);
+   const [loadingFeed, setLoadingFeed] = useState<boolean>(true);
+   const [feedError, setFeedError] = useState<string | null>(null);
+-  const [selectedLanguage, setSelectedLanguage] = useState<string>('en'); // Default to 'en' or 'vi'
+   const [chapterFilter, setChapterFilter] = useState<string>('');
+ 
+   useEffect(() => {
+@@ -44,15 +43,14 @@
+   }, [manga.id]);
+ 
+   useEffect(() => {
+-    loadChapters(selectedLanguage);
+-  }, [manga.id, selectedLanguage]);
++    loadChapters();
++  }, [manga.id]);
+ 
+-  const loadChapters = async (lang: string) => {
++  const loadChapters = async () => {
+     setLoadingFeed(true);
+     setFeedError(null);
+     try {
+-      const langsToFetch = lang === 'all' ? [] : [lang];
+-      const result = await getMangaFeed(manga.id, langsToFetch, 500, 0);
++      const result = await getMangaFeed(manga.id, [], 500, 0);
+       setChapters(result.data);
+     } catch (err: any) {
+       setFeedError(err.message || 'Failed to load chapter list');
+@@ -225,35 +223,6 @@
+             <BookOpen size={18} />
+             <span>Chapter List ({filteredChapters.length})</span>
+           </h2>
+-
+-          {/* Language Selector */}
+-          <div className="flex items-center gap-1 text-xs font-sans font-bold">
+-            <Globe size={14} className="mr-1 text-stone-500" />
+-            <span className="font-bold mr-1 hidden sm:inline uppercase">Lang:</span>
+-            {[
+-              { code: 'vi', label: 'VI' },
+-              { code: 'en', label: 'EN' },
+-              { code: 'ja', label: 'JA' },
+-              { code: 'all', label: 'ALL' },
+-            ].map((lang) => (
+-              <button
+-                key={lang.code}
+-                id={`btn-lang-${lang.code}`}
+-                onClick={() => setSelectedLanguage(lang.code)}
+-                className={`px-2 py-1 font-black text-[11px] uppercase cursor-pointer ${
+-                  selectedLanguage === lang.code
+-                    ? isEink
+-                      ? 'bg-black text-white border-2 border-black'
+-                      : 'bg-amber-600 text-white'
+-                    : isEink
+-                    ? 'bg-stone-100 text-black border-2 border-black'
+-                    : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+-                }`}
+-              >
+-                {lang.code.toUpperCase()}
+-              </button>
+-            ))}
+-          </div>
+         </div>
+ 
+         {/* Search Chapter filter */}
+@@ -287,7 +256,7 @@
+           <div className={`p-3 text-xs font-bold my-2 ${isEink ? 'border-2 border-black bg-stone-100' : 'bg-rose-950/60 text-rose-300 border border-rose-800 rounded'}`}>
+             <span>Error: {feedError}</span>
+             <button
+-              onClick={() => loadChapters(selectedLanguage)}
++              onClick={() => loadChapters()}
+               className="ml-2 underline cursor-pointer"
+             >
+               Retry
+@@ -297,7 +266,7 @@
+ 
+         {!loadingFeed && !feedError && filteredChapters.length === 0 && (
+           <div className="py-8 text-center text-xs font-bold text-stone-500">
+-            No chapters found for selected language '{selectedLanguage.toUpperCase()}'. Try selecting 'ALL' or 'EN'.
++            No chapters found.
+           </div>
+         )}
+ 
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/src/components/KindleSettingsModal.tsx	2026-08-08 01:17:02.000000000 +0000
++++ src/components/KindleSettingsModal.tsx	2026-08-08 12:36:35.000816847 +0000
+@@ -1,6 +1,6 @@
+ import React from 'react';
+ import { ReaderSettings } from '../types';
+-import { Check, Feather, RefreshCw, X } from 'lucide-react';
++import { Feather, RefreshCw, X } from 'lucide-react';
+ 
+ interface KindleSettingsModalProps {
+   settings: ReaderSettings;
+@@ -19,17 +19,6 @@
+     onSave({ ...settings, [key]: value });
+   };
+ 
+-  const toggleLanguage = (lang: string) => {
+-    const current = settings.preferredLanguages || ['en'];
+-    let updated: string[];
+-    if (current.includes(lang)) {
+-      if (current.length === 1) return; // Keep at least one
+-      updated = current.filter((l) => l !== lang);
+-    } else {
+-      updated = [...current, lang];
+-    }
+-    handleChange('preferredLanguages', updated);
+-  };
+ 
+   const handleFlash = () => {
+     const flashEl = document.createElement('div');
+@@ -181,38 +170,6 @@
+             </div>
+           </div>
+ 
+-          {/* Preferred Languages */}
+-          <div>
+-            <label className="block mb-1 font-black uppercase text-[11px]">Preferred Chapter Languages</label>
+-            <div className="flex gap-2">
+-              {[
+-                { code: 'vi', label: 'Tiếng Việt (VI)' },
+-                { code: 'en', label: 'English (EN)' },
+-                { code: 'ja', label: 'Raw Japanese (JA)' },
+-              ].map((lang) => {
+-                const isSelected = settings.preferredLanguages.includes(lang.code);
+-                return (
+-                  <button
+-                    key={lang.code}
+-                    onClick={() => toggleLanguage(lang.code)}
+-                    className={`flex-1 py-2 font-black text-xs uppercase flex items-center justify-center gap-1 cursor-pointer ${
+-                      isSelected
+-                        ? isEink
+-                          ? 'border-2 border-black bg-black text-white'
+-                          : 'bg-amber-600 text-white'
+-                        : isEink
+-                        ? 'border-2 border-black bg-white text-black'
+-                        : 'bg-stone-800 text-stone-300'
+-                    }`}
+-                  >
+-                    {isSelected && <Check size={14} />}
+-                    <span>{lang.label}</span>
+-                  </button>
+-                );
+-              })}
+-            </div>
+-          </div>
+-
+           {/* Screen Refresh Flash Button */}
+           <div className="pt-2">
+             <button
+--- /mnt/data/manga_project/kindle-manga-reader-voyage-es5-v3/src/services/mangadex.ts	2026-08-08 01:17:02.000000000 +0000
++++ src/services/mangadex.ts	2026-08-08 12:36:35.001026307 +0000
+@@ -117,7 +117,6 @@
+   const query: QueryPair[] = [];
+   addPair(query, 'limit', limit);
+   addPair(query, 'offset', offset);
+-  addPair(query, 'includes[]', 'scanlation_group');
+   addPair(query, 'includes[]', 'user');
+   addPair(query, 'order[chapter]', 'asc');
+ 

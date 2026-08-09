@@ -1,0 +1,6 @@
+{
+  "name": "Kindle Voyage Manga Reader",
+  "description": "MangaDex reader optimized for Kindle Voyage, E-ink screens, and legacy browsers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

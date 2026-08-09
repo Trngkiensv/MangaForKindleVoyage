@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kindle Compatibility Test</title>
+  <style>
+    body { margin: 0; padding: 18px; font-family: Arial, sans-serif; background: #fff; color: #000; }
+    h1 { font-size: 24px; }
+    .box { border: 3px solid #000; padding: 12px; margin: 12px 0; }
+    .ok { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Kindle Voyage Test</h1>
+  <div class="box"><span class="ok">HTML:</span> OK</div>
+  <div class="box" id="js"><span class="ok">JavaScript:</span> testing...</div>
+  <div class="box" id="api"><span class="ok">Server API:</span> testing...</div>
+  <script>
+    (function () {
+      document.getElementById('js').innerHTML = '<span class="ok">JavaScript:</span> OK';
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4) {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              document.getElementById('api').innerHTML = '<span class="ok">Server API:</span> OK - ' + xhr.responseText;
+            } else {
+              document.getElementById('api').innerHTML = '<span class="ok">Server API:</span> FAILED (' + xhr.status + ')';
+            }
+          }
+        };
+        xhr.open('GET', '/api/health?t=' + new Date().getTime(), true);
+        xhr.send(null);
+      } catch (e) {
+        document.getElementById('api').innerHTML = '<span class="ok">Server API:</span> FAILED';
+      }
+    }());
+  </script>
+</body>
+</html>

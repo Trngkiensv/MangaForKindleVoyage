@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Kindle Voyage Manga Reader</title>
+  <link rel="stylesheet" href="/kindle-voyage.css?v=14">
+</head>
+<body>
+  <div id="app">
+    <div class="topbar">
+      <div class="brand">Kindle Manga</div>
+      <div class="sub">Voyage ES5 v16 - VI defaults OFF + cancelable translation prefetch</div>
+      <div class="row">
+        <input id="search" class="searchbox" type="text" value="" placeholder="Manga title or supported ID">
+        <button id="searchBtn" class="btn btn-dark" type="button">Search</button>
+      </div>
+      <div class="nav">
+        <button id="homeBtn" class="btn" type="button">Home</button>
+        <button id="savedBtn" class="btn" type="button">Saved</button>
+        <button id="historyBtn" class="btn" type="button">History</button>
+        <a class="btn" href="/kindle-test.html">Test</a>
+      </div>
+    </div>
+    <div id="status" class="status">Starting Kindle-compatible app...</div>
+    <div id="view" class="content">
+      <div class="notice">If this message stays visible, JavaScript did not start.</div>
+    </div>
+  </div>
+  <script type="text/javascript">
+    // This tiny ES3-compatible watchdog runs before the main file. If the old
+    // Kindle engine cannot parse/load kindle-voyage.js, show a useful error
+    // instead of leaving the generic "JavaScript did not start" message.
+    (function () {
+      window.__kindleVoyageScriptStarted = false;
+      window.onerror = function (message, source, line) {
+        var status = document.getElementById("status");
+        var view = document.getElementById("view");
+        var msg = "JavaScript failed: " + String(message || "unknown error");
+        if (line) msg += " at line " + line;
+        if (status) {
+          status.className = "status status-error";
+          status.innerHTML = msg;
+        }
+        if (view) view.innerHTML = '<div class="notice">' + msg + '</div>';
+        return false;
+      };
+      window.setTimeout(function () {
+        if (!window.__kindleVoyageScriptStarted) {
+          var status = document.getElementById("status");
+          var view = document.getElementById("view");
+          var msg = "kindle-voyage.js did not load or could not be parsed by this browser.";
+          if (status) {
+            status.className = "status status-error";
+            status.innerHTML = msg;
+          }
+          if (view) view.innerHTML = '<div class="notice">' + msg + '</div>';
+        }
+      }, 2500);
+    }());
+  </script>
+  <script type="text/javascript" src="/kindle-voyage.js?v=16"></script>
+</body>
+</html>

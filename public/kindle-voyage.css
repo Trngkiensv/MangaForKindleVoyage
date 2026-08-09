@@ -1,0 +1,112 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: #000;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px;
+  line-height: 1.35;
+  -webkit-text-size-adjust: 100%;
+}
+* { box-sizing: border-box; }
+a { color: #000; }
+#app { width: 100%; max-width: 760px; margin: 0 auto; background: #fff; }
+.topbar { border-bottom: 3px solid #000; padding: 10px; background: #fff; }
+.brand { font-family: Georgia, serif; font-size: 24px; font-weight: bold; margin: 0 0 8px 0; }
+.sub { font-size: 12px; margin: 0 0 8px 0; }
+.row { width: 100%; clear: both; }
+.searchbox { width: 68%; height: 38px; border: 2px solid #000; padding: 5px; font-size: 16px; background: #fff; color: #000; }
+.btn { display: inline-block; border: 2px solid #000; background: #fff; color: #000; padding: 7px 10px; margin: 2px; font-size: 15px; font-weight: bold; text-decoration: none; vertical-align: middle; }
+.btn-dark { background: #000; color: #fff; }
+.btn-wide { display: block; width: 100%; text-align: center; margin: 5px 0; padding: 10px; }
+.nav { margin-top: 7px; }
+.status { padding: 8px 10px; border-bottom: 1px solid #000; font-size: 13px; min-height: 34px; }
+.status-error { font-weight: bold; border: 2px solid #000; margin: 8px; }
+.content { padding: 10px; }
+.heading { font-family: Georgia, serif; font-size: 21px; font-weight: bold; margin: 4px 0 10px 0; border-bottom: 2px solid #000; padding-bottom: 5px; }
+.manga-item { clear: both; min-height: 150px; border-bottom: 2px solid #000; padding: 10px 0; overflow: hidden; }
+.cover-wrap { float: left; width: 105px; margin-right: 10px; }
+.cover { width: 100px; min-height: 130px; border: 1px solid #000; background: #eee; }
+.manga-info { margin-left: 115px; }
+.manga-title { font-family: Georgia, serif; font-size: 18px; font-weight: bold; margin: 0 0 5px 0; }
+.muted { font-size: 12px; }
+.clear { clear: both; height: 0; overflow: hidden; }
+.description { font-size: 14px; margin: 8px 0 12px 0; }
+.chapter { display: block; width: 100%; text-align: left; border: 2px solid #000; background: #fff; color: #000; padding: 9px; margin: 6px 0; font-size: 15px; }
+.chapter:active, .btn:active { background: #000; color: #fff; }
+.chapter-main { display: block; font-weight: bold; font-size: 15px; }
+.chapter-meta { display: block; font-size: 12px; margin-top: 3px; font-weight: normal; }
+.chapter-summary { border: 2px solid #000; padding: 8px; margin: 6px 0; font-size: 13px; }
+.reader { padding: 0; margin: 0; text-align: center; width: 100%; }
+.reader-control-shell {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  border-bottom: 2px solid #000;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 999;
+}
+.reader-control-spacer { width: 100%; height: 0; margin: 0; padding: 0; }
+.reader-panel-toggle { display: block; width: 100%; min-height: 58px; border: 0; border-bottom: 1px solid #000; background: #000; color: #fff; padding: 14px 8px; margin: 0; font-size: 18px; line-height: 24px; font-weight: bold; text-align: center; }
+.reader-panel-toggle-open { background: #fff; color: #000; border: 2px solid #000; }
+.reader-panel-body { display: none; width: 100%; padding: 5px 4px 7px 4px; background: #fff; }
+.reader-panel-row { margin: 3px 0; }
+.reader-big { min-height: 48px; padding: 10px 8px; font-size: 18px; }
+.reader-chapters-btn { width: 98%; }
+.reader-page-big { width: 48%; min-height: 54px; padding: 12px 4px; font-size: 19px; }
+.reader-control-big { width: 31%; min-height: 48px; padding: 9px 3px; font-size: 16px; }
+.zoom-label { display: inline-block; min-width: 48px; font-size: 13px; font-weight: bold; text-align: center; }
+.zoom-label-big { width: 31%; padding: 12px 2px; vertical-align: middle; }
+.reader-title { font-weight: bold; font-size: 14px; padding: 5px 4px 2px 4px; white-space: nowrap; overflow: hidden; }
+.page-counter { font-size: 15px; font-weight: bold; padding: 3px 2px 1px 2px; }
+.page-frame { width: 100%; margin: 0; padding: 0; text-align: center; overflow: hidden; }
+.page-image { display: block; width: auto; height: auto; margin: 0 auto; padding: 0; background: #fff; }
+.reader-active { overflow-x: auto; }
+.reader-active #app { width: 100%; max-width: none; margin: 0; }
+.reader-active .topbar, .reader-active #status { display: none; }
+.reader-active .content { padding: 0; margin: 0; width: 100%; max-width: none; }
+.center { text-align: center; }
+.hidden { display: none; }
+.notice { border: 2px solid #000; padding: 8px; margin: 8px 0; font-size: 13px; }
+.small { font-size: 12px; }
+.reader-nav-row {
+  width: 100%;
+  white-space: nowrap;
+  text-align: center;
+}
+
+@media screen and (max-width: 520px) {
+  .searchbox { width: 62%; }
+  .brand { font-size: 22px; }
+}
+.chapter-pager { border: 2px solid #000; padding: 5px 2px; margin: 7px 0; text-align: center; white-space: normal; }
+.chapter-pager .btn { padding: 7px 8px; margin: 2px 1px; font-size: 13px; }
+.chapter-page-word, .chapter-page-total { display: inline-block; padding: 7px 2px; font-size: 13px; font-weight: bold; vertical-align: middle; }
+.chapter-page-input { width: 58px; height: 38px; border: 2px solid #000; background: #fff; color: #000; padding: 4px 3px; margin: 1px 2px; font-size: 17px; font-weight: bold; text-align: center; vertical-align: middle; }
+.chapter-go { min-width: 44px; }
+
+/* ES5 v14 resilient Cloudflare fallback + fixed reader controls */
+.page-stage { position: relative; display: inline-block; margin: 0 auto; padding: 0; line-height: 0; vertical-align: top; }
+.translation-layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; padding: 0; z-index: 5; pointer-events: none; line-height: normal; text-align: left; }
+.translation-box { position: absolute; box-sizing: border-box; overflow: hidden; background: #fff; color: #000; border: 1px solid #000; padding: 2px 3px; margin: 0; font-family: Arial, Helvetica, sans-serif; font-weight: bold; text-align: center; white-space: normal; }
+.translation-status { min-height: 26px; padding: 4px 6px; margin: 2px 4px 4px 4px; border: 1px solid #000; font-size: 13px; line-height: 17px; text-align: center; }
+
+
+/* ES5 v16 reader controls; VI is opt-in per session */
+.reader-side-rail { background: #fff; border-right: 2px solid #000; text-align: center; overflow: hidden; }
+.reader-side-translate { display: block; width: 100%; margin: 0; padding: 4px 1px; border: 0; border-bottom: 2px solid #000; background: #fff; color: #000; font-size: 14px; line-height: 18px; font-weight: bold; text-align: center; }
+.reader-side-translate-on { background: #000; color: #fff; }
+.reader-side-translate-off { background: #fff; color: #000; }
+.reader-side-prev { display: block; width: 100%; margin: 0; padding: 0 2px; border: 0; background: #000; color: #fff; font-size: 15px; line-height: 21px; font-weight: bold; text-align: center; }
+.reader-side-prev:disabled { background: #ddd; color: #777; }
+.reader-side-prev span { display: block; width: 100%; }
+.reader-chapter-nav { width: 100%; white-space: normal; text-align: center; padding: 2px 0; }
+.reader-chapter-btn { width: 27%; min-height: 48px; padding: 8px 2px; font-size: 14px; }
+.reader-chapter-input { width: 18%; min-width: 58px; height: 48px; border: 2px solid #000; background: #fff; color: #000; padding: 4px 2px; margin: 2px 1px; font-size: 17px; font-weight: bold; text-align: center; vertical-align: middle; }
+.reader-chapter-go { width: 14%; min-width: 44px; min-height: 48px; padding: 8px 2px; font-size: 14px; }
+.reader-chapter-btn:disabled { color: #777; border-color: #777; }
+.reader-active .page-frame { min-height: 100px; }
