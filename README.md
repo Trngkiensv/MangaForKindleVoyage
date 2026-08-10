@@ -118,6 +118,22 @@ Kindle Voyage ES5 v16 adds a left Previous-page rail, direct tap-to-next reading
 ## ES5 v18: five-page reading window + lean translation
 
 - While reading, the Kindle retains a five-page image window: two previous pages, the current page, and two following pages. Near chapter boundaries the window naturally contains fewer pages.
-- VI ON translates the current page immediately and warms exactly one next page in the background. The current page is no longer duplicated in the prefetch queue.
+- VI ON translates the current page immediately and warms the configured following pages in the background. The current page is no longer duplicated in the prefetch queue.
 - The Kindle keeps the five most recently viewed translation results in a small in-memory hot cache, so stepping back through recently read pages does not even need another translation HTTP request.
 - The server-side `.cache/en-vi-translation/` cache is still preserved as the longer-lived quota-saving layer, so revisiting older translated pages should not consume Cloudflare/OCR quota again while that server cache still exists.
+
+
+## ES5 v19: SFX quota saver + two-page translation warmup
+
+When `VI ON`, the current page is translated immediately and the next **two** pages are warmed sequentially into the Kindle five-page translation hot cache. Image reading still keeps a five-page window (`-2, -1, current, +1, +2`).
+
+Before Cloudflare is called, obvious URLs, standalone proper names/honorifics, common manga SFX, and consonant-heavy OCR noise are filtered locally. Skipped regions stay untouched in the original artwork and consume **no LLM neurons**. The Qwen prompt uses `/no_think`, is shorter, and applies a dynamic output cap.
+
+Quota-saving mode is the default:
+
+```env
+TRANSLATION_PREFETCH_AHEAD=2
+TRANSLATION_ALLOW_FALLBACK=false
+```
+
+With fallback disabled, an incomplete Qwen page is not retried with Llama and missing regions are simply left in the original artwork. Set `TRANSLATION_ALLOW_FALLBACK=true` only if you prefer completeness over neuron usage.

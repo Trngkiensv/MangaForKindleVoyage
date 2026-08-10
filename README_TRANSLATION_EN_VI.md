@@ -69,7 +69,7 @@ $env:CLOUDFLARE_ACCOUNT_ID="YOUR_ACCOUNT_ID"
 $env:CLOUDFLARE_API_TOKEN="YOUR_API_TOKEN"
 $env:CLOUDFLARE_MANGA_LLM_MODEL="@cf/qwen/qwen3-30b-a3b-fp8"
 $env:MANGA_TRANSLATION="true"
-$env:TRANSLATION_PREFETCH_AHEAD="1"
+$env:TRANSLATION_PREFETCH_AHEAD="2"
 ```
 
 Optional tuning:
@@ -117,13 +117,14 @@ WeebCentral page
     -> server creates <= 1 MB OCR-only grayscale JPEG
     -> OCR.Space returns English physical lines + coordinates
     -> v12 groups wrapped lines into speech/caption regions
-    -> all regions on the page go to Cloudflare manga LLM together
+    -> obvious SFX/noise/names/URLs are filtered locally
+    -> remaining dialogue/narration regions go to Cloudflare together
     -> EN -> natural concise VI
     -> result is cached on disk
     -> Kindle overlays Vietnamese on the original image
 ```
 
-v18 translates the current page on demand and warms only the immediately following page when `TRANSLATION_PREFETCH_AHEAD=1`. The Kindle also keeps the five most recently viewed translation results in a small in-memory hot cache for instant backtracking. Successful results remain in `.cache/en-vi-translation/` on the server as a longer-lived quota-saving cache.
+v19 translates the current page on demand and warms the next two pages sequentially when `TRANSLATION_PREFETCH_AHEAD=2`. The Kindle also keeps the five most recently viewed translation results in a small in-memory hot cache for instant backtracking. Successful results remain in `.cache/en-vi-translation/` on the server as a longer-lived quota-saving cache.
 
 ## Prompt behavior
 

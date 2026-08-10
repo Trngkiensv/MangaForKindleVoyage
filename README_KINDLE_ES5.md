@@ -97,12 +97,12 @@ See `README_TRANSLATION_EN_VI.md` for OCR.Space and Cloudflare setup. OCR/transl
 
 - Vietnamese translation starts OFF on every browser/app session, even if an older build saved VI ON in localStorage.
 - While VI is OFF, the Kindle does not request page OCR, Cloudflare translation, or translation prefetch. Image preloading continues normally.
-- Turning VI OFF asks the server to remove not-yet-started prefetch jobs for the current chapter. A request that has already reached OCR.Space/Cloudflare may still finish, because already-sent API usage cannot be recovered.
-- Switching chapters also cancels queued translation prefetch jobs from the previous chapter.
+- Turning VI OFF stops the client warmup chain and cancels any legacy queued server prefetch. A request that has already reached OCR.Space/Cloudflare may still finish, because already-sent API usage cannot be recovered.
+- Switching chapters stops the previous chapter warmup chain.
 - Turning VI ON explicitly translates the current page and warms the configured pages ahead.
 
-## ES5 v18: five-page nearby image window
+## ES5 v19: five-page nearby image window
 
 - The reader keeps two previous images and two following images warm around the currently displayed page, for a five-page working window.
-- Translation is intentionally smaller than image preload: the current page is translated on demand and only the next page is warmed.
+- Translation is intentionally smaller than image preload: the current page is translated on demand and the next two pages are warmed sequentially.
 - Five recently viewed translation pages are retained in an in-memory hot cache for quick backtracking; the server disk cache remains the longer-lived quota-saving cache.

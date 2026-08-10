@@ -181,7 +181,8 @@ app.get('/api/translation/chapter/:id/prefetch', async (req, res) => {
     const replaceQueued = String(req.query.replace || '') === '1';
     const cancelled = replaceQueued ? translationService.cancelPrefetch(req.params.id).cancelled : 0;
     let queued = 0;
-    for (let pageNumber = fromPage; pageNumber <= Math.min(pageList.length, fromPage + ahead); pageNumber += 1) {
+    // `ahead` is the number of pages to queue starting at `fromPage`.
+    for (let pageNumber = fromPage; pageNumber < Math.min(pageList.length + 1, fromPage + ahead); pageNumber += 1) {
       try {
         const context = translationService.makeContext(provider, req.params.id, pageNumber - 1, pages);
         translationService.queuePrefetch(context);

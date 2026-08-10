@@ -29,7 +29,8 @@
         translationLoading: false,
         translationError: "",
         translationRequestSerial: 0,
-        translationPrefetchAhead: 1,
+        translationPrefetchAhead: 2,
+        translationPrefetchSerial: 0,
         translationPageCache: {},
         translationCacheOrder: [],
         translationCacheLimit: 5,
@@ -74,8 +75,9 @@
     }
 
     function leaveReaderMode() {
-        // Leaving the reader makes warmed translation pages unnecessary. Drop
-        // any not-yet-started jobs so they cannot spend OCR/LLM quota later.
+        // Leaving the reader makes warmed translation pages unnecessary. Stop
+        // the client warmup chain and drop any legacy server-side queued jobs.
+        state.translationPrefetchSerial += 1;
         if (state.currentChapterId) cancelTranslationPrefetch(state.currentChapterId);
         document.body.className = "";
     }
@@ -1325,6 +1327,7 @@
         // future browser/app start cannot accidentally spend OCR/API quota.
         if (!state.translationEnabled) {
             state.translationRequestSerial += 1;
+            state.translationPrefetchSerial += 1;
             state.translationLoading = false;
             state.translationError = "";
             state.translationData = null;
@@ -1377,19 +1380,45 @@
     }
 
     function prefetchNextTranslation() {
-        var nextPageNumber, count, url;
+        var serial, chapterId, firstPageNumber, lastPageNumber, count;
         if (!state.translationAvailable || !state.translationEnabled || !state.currentChapterId) return;
         if (state.translationPrefetchAhead < 1) return;
         count = currentPageCount();
-        nextPageNumber = state.pageIndex + 2;
-        if (nextPageNumber > count) return;
+        firstPageNumber = state.pageIndex + 2;
+        if (firstPageNumber > count) return;
+        lastPageNumber = Math.min(count, firstPageNumber + state.translationPrefetchAhead - 1);
+        chapterId = state.currentChapterId;
+        serial = state.translationPrefetchSerial + 1;
+        state.translationPrefetchSerial = serial;
 
-        // Keep only the useful warm-ahead job. The current page is requested
-        // separately at high priority; background translation warms exactly
-        // one following page and never re-queues the current page. replace=1
-        // atomically drops stale not-yet-started jobs before queuing this page.
-        url = "/api/translation/chapter/" + encodeURIComponent(state.currentChapterId) + "/prefetch?from=" + nextPageNumber + "&ahead=0&replace=1";
-        xhrGet(url, function () {});
+        // Warm the next two translated pages sequentially and keep successful
+        // results in the five-page Kindle hot cache. This makes the next page
+        // appear immediately without firing two Cloudflare jobs at once.
+        function warm(pageNumber) {
+            var hot, url;
+            if (serial !== state.translationPrefetchSerial) return;
+            if (!state.translationEnabled || chapterId !== state.currentChapterId) return;
+            if (pageNumber > lastPageNumber) return;
+            hot = getHotTranslation(chapterId, pageNumber);
+            if (hot) {
+                warm(pageNumber + 1);
+                return;
+            }
+            url = "/api/translation/chapter/" + encodeURIComponent(chapterId) + "/page/" + pageNumber;
+            xhrGet(url, function (err, json) {
+                // If the request already spent quota, keep the successful result
+                // when still reading the same chapter, even if the prefetch
+                // window moved while the request was in flight.
+                if (!err && json && json.status === "ready" && chapterId === state.currentChapterId) {
+                    putHotTranslation(chapterId, pageNumber, json);
+                }
+                if (serial !== state.translationPrefetchSerial) return;
+                if (!state.translationEnabled || chapterId !== state.currentChapterId) return;
+                warm(pageNumber + 1);
+            });
+        }
+
+        warm(firstPageNumber);
     }
 
     function preloadNearbyImages() {
@@ -1636,7 +1665,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v18 started. 5-page image window + current/next translation + 5-page hot translation cache. Testing local API...", false);
+        setStatus("ES5 v19 started. 5-page image window + current/+2 translation + SFX quota saver. Testing local API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
@@ -1649,7 +1678,7 @@
                 if (!translationErr && translationInfo) {
                     state.translationAvailable = !!translationInfo.enabled;
                     state.translationPrefetchAhead = parseInt(translationInfo.prefetchAhead, 10);
-                    if (!isFinite(state.translationPrefetchAhead)) state.translationPrefetchAhead = 1;
+                    if (!isFinite(state.translationPrefetchAhead)) state.translationPrefetchAhead = 2;
                 } else {
                     state.translationAvailable = false;
                 }

@@ -70,6 +70,20 @@ const CACHE_VERSION = 13;
 const MAX_REGIONS = 80;
 const FREE_OCR_MAX_BYTES = 950 * 1024;
 
+
+const SFX_WORDS = new Set([
+  'BAM', 'BANG', 'BOOM', 'BONK', 'BUMP', 'BUZZ', 'CLACK', 'CLICK', 'CLINK', 'CRACK', 'CRASH',
+  'CREAK', 'DING', 'DRIP', 'FWOOSH', 'GASP', 'GRR', 'GULP', 'HISS', 'KNOCK', 'PLIP', 'PLOP',
+  'RING', 'RUSTLE', 'SIGH', 'SLAM', 'SNAP', 'SNIFF', 'SPLASH', 'STEP', 'SWISH', 'SWOOSH',
+  'TAP', 'THUD', 'THUMP', 'TICK', 'TOCK', 'WHOOSH', 'WHAM', 'WHACK', 'ZAP', 'ZIP', 'ZOOM',
+]);
+
+const COMMON_SHORT_DIALOGUE_WORDS = new Set([
+  'AH', 'EH', 'HM', 'HMM', 'HUH', 'OH', 'OW', 'HEY', 'HI', 'BYE', 'NO', 'YES', 'YEAH', 'OK', 'OKAY',
+  'WAIT', 'STOP', 'HELP', 'RUN', 'GO', 'COME', 'LOOK', 'WHAT', 'WHEN', 'WHERE', 'WHO', 'WHY', 'HOW',
+  'SORRY', 'THANKS', 'PLEASE', 'DAMN', 'IDIOT', 'FOOL', 'RIGHT', 'WRONG', 'REALLY', 'SURE', 'FINE',
+]);
+
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
   if (!value) return fallback;
   return !/^(0|false|no|off)$/i.test(value.trim());
@@ -263,7 +277,7 @@ export function normalizeOcrSpaceLines(linesInput: any[]): OcrRegion[] {
 export class EnglishVietnameseTranslationService {
   readonly sourceLanguage = SOURCE_LANGUAGE;
   readonly targetLanguage = TARGET_LANGUAGE;
-  readonly prefetchAhead = positiveInt(process.env.TRANSLATION_PREFETCH_AHEAD, 1, 0, 1);
+  readonly prefetchAhead = positiveInt(process.env.TRANSLATION_PREFETCH_AHEAD, 2, 0, 2);
 
   private readonly enabledByEnv = boolEnv(process.env.MANGA_TRANSLATION, true);
   private readonly cacheDir = path.resolve(
@@ -274,7 +288,7 @@ export class EnglishVietnameseTranslationService {
   private readonly cloudflareModel = String(process.env.CLOUDFLARE_MANGA_LLM_MODEL || DEFAULT_CF_MODEL).trim() || DEFAULT_CF_MODEL;
   private readonly cloudflareFallbackModel = String(process.env.CLOUDFLARE_FALLBACK_MODEL || DEFAULT_CF_FALLBACK_MODEL).trim() || DEFAULT_CF_FALLBACK_MODEL;
   private readonly cloudflareMaxTokens = positiveInt(process.env.CLOUDFLARE_MAX_TOKENS, 3072, 256, 4096);
-  private readonly fallbackConcurrency = positiveInt(process.env.CLOUDFLARE_FALLBACK_CONCURRENCY, 2, 1, 4);
+  private readonly allowFallback = boolEnv(process.env.TRANSLATION_ALLOW_FALLBACK, false);
   private pending = new Map<string, Promise<TranslatedPage>>();
   private prefetchQueue: Array<{
     key: string;
@@ -407,23 +421,11 @@ export class EnglishVietnameseTranslationService {
 
   private mangaSystemPrompt(): string {
     return [
-      'You are a faithful English-to-Vietnamese manga translation engine.',
-      'Your first priority is semantic accuracy: preserve what the English actually says before trying to sound stylish or localized.',
-      'Translate each OCR region into clear, natural, neutral Vietnamese similar to a high-quality general-purpose translator.',
-      'Do not invent actions, motives, objects, slang, or meanings that are not present in the source.',
-      'When an English word or compound has a clear conventional dictionary meaning in context, translate that meaning directly.',
-      'Be especially careful with phrasal verbs, hyphenated compounds, and action terms. For example: "break-in" or "breaking in" means "đột nhập" when referring to unauthorized entry; "best of luck" means "chúc may mắn"; "all right" at the start of an action usually means "được rồi".',
-      'The input contains OCR regions from ONE manga page in approximate reading order.',
-      'Each region has already merged physical OCR line breaks from the same speech bubble, so treat each region as ONE complete utterance.',
-      'Never split one region into multiple outputs and never merge different ids.',
-      'Use other regions on the page only to resolve pronouns, omitted subjects, tone, or a genuinely ambiguous phrase. Never let surrounding context override the literal lexical meaning of the current region.',
-      'Preserve character names and proper nouns unless there is a standard Vietnamese form.',
-      'Preserve emotion, insults, jokes, hesitations, ellipses, question marks, and exclamation marks. Do not censor.',
-      'Prefer concise Vietnamese that fits the original speech bubble, but never shorten so aggressively that meaning changes.',
-      'Use normal Vietnamese capitalization. Do not write the translation in ALL CAPS merely because manga lettering is uppercase.',
-      'Before returning, silently compare every Vietnamese line against its English source and fix any mistranslated verb, noun, negation, direction, or action.',
-      'Do not explain the translation and do not add translator notes.',
-      'Return ONLY valid JSON in this exact shape: {"translations":[{"id":0,"text":"..."}]}.',
+      'Translate English manga dialogue and narration into concise, natural Vietnamese manga wording.',
+      'Be faithful to the source meaning. Do not invent, explain, apologize, answer questions, or add notes.',
+      'Preserve names and proper nouns. Keep emotion, punctuation, insults, and tone.',
+      'Each OCR region is one utterance. Never split or merge ids.',
+      'Return only valid JSON in this exact shape: {"translations":[{"id":0,"text":"..."}]}.',
       'Return exactly one object for every input id, in the same order.',
     ].join(' ');
   }
@@ -442,6 +444,63 @@ export class EnglishVietnameseTranslationService {
       } catch (_error) {}
     }
     return null;
+  }
+
+  private localSkipReason(source: string): string | null {
+    const raw = cleanText(source);
+    if (!raw) return 'empty';
+
+    if (/^(?:https?:\/\/|www\.)\S+$/i.test(raw)) return 'url';
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return 'email';
+    if (/^(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?$/i.test(raw)) return 'hostname';
+
+    // Standalone Japanese-style honorific names should stay visible in the
+    // original artwork instead of spending an LLM request just to echo them.
+    if (/^[A-Z][A-Z'’.-]{1,24}\s*(?:-|\s)\s*(?:CHAN|SAN|SAMA|KUN|SENPAI|SENSEI)[!?.,]*$/i.test(raw)) {
+      return 'proper-name';
+    }
+
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    if (tokens.length === 2) {
+      const titleWord = /^[A-Z][A-Za-z'’-]+[!?.,]*$/;
+      const initial = /^[A-Z]\.?$/;
+      if (titleWord.test(tokens[0]) && titleWord.test(tokens[1])) return 'proper-name';
+      if (initial.test(tokens[0]) && titleWord.test(tokens[1])) return 'proper-name';
+    }
+
+    const words = (raw.toUpperCase().match(/[A-Z]+/g) || []).filter(Boolean);
+    if (words.length && words.length <= 4 && words.some((word) => SFX_WORDS.has(word))) return 'sfx';
+
+    // OCR noise / stylized SFX often arrives as one short consonant-heavy
+    // token such as "SUGNP". Keep common dialogue words so "WAIT!" or "NO!"
+    // still gets translated.
+    if (words.length === 1) {
+      const word = words[0];
+      if (SFX_WORDS.has(word)) return 'sfx';
+      if (!COMMON_SHORT_DIALOGUE_WORDS.has(word) && word.length >= 4 && word.length <= 8) {
+        const vowels = (word.match(/[AEIOUY]/g) || []).length;
+        const vowelRatio = vowels / Math.max(1, word.length);
+        if (vowelRatio <= 0.20 || /[BCDFGHJKLMNPQRSTVWXZ]{4,}/.test(word)) return 'ocr-noise';
+      }
+    }
+
+    return null;
+  }
+
+  private looksLikeMetaResponse(source: string, translated: string): boolean {
+    const value = cleanText(translated);
+    if (!value) return true;
+    const lower = value.toLowerCase();
+    if (value.length > Math.max(160, cleanText(source).length * 3.5)) return true;
+    return /(?:tôi không thể|không thể tìm thấy|không tìm thấy.*(?:văn bản|thông tin)|vui lòng (?:cung cấp|gửi)|hãy cung cấp|i cannot|i can't|cannot find|please provide|as an ai|no text (?:was )?found)/i.test(lower);
+  }
+
+  private pageOutputBudget(texts: string[]): number {
+    const sourceChars = texts.reduce((sum, value) => sum + cleanText(value).length, 0);
+    // Manga translation output should be short. A dynamic cap prevents a
+    // reasoning model from consuming a large output budget on meta text.
+    const estimated = 192 + Math.ceil(sourceChars * 1.15) + texts.length * 20;
+    return Math.max(256, Math.min(this.cloudflareMaxTokens, estimated));
   }
 
   private isLikelyNonTranslatableSource(source: string): boolean {
@@ -499,7 +558,9 @@ export class EnglishVietnameseTranslationService {
       if (!Number.isInteger(id)) id = arrayIndex;
       if (id < 0 || id >= output.length) return;
       const value = cleanText(item?.text ?? item?.translation ?? item?.translated ?? '');
-      if (value && !this.looksUntranslated(sourceTexts[id], value)) output[id] = value.slice(0, 2000);
+      if (value && !this.looksUntranslated(sourceTexts[id], value) && !this.looksLikeMetaResponse(sourceTexts[id], value)) {
+        output[id] = value.slice(0, 1200);
+      }
     });
     return output;
   }
@@ -652,91 +713,20 @@ export class EnglishVietnameseTranslationService {
     );
   }
 
-  private async translateOneFallback(text: string): Promise<string> {
-    const singleSystemPrompt = [
-      'Translate the English manga text into faithful, natural Vietnamese.',
-      'Preserve the exact meaning, action, negation, tone, punctuation, names, and proper nouns.',
-      'Do not explain, do not add notes, and do not return JSON.',
-      'Return only the Vietnamese translation.',
-    ].join(' ');
-    let raw: string;
-    try {
-      raw = await this.runCloudflareLlm(
-        [
-          { role: 'system', content: singleSystemPrompt },
-          { role: 'user', content: text },
-        ],
-        Math.min(512, this.cloudflareMaxTokens),
-        this.cloudflareFallbackModel,
-      );
-    } catch (error: any) {
-      // As a last resort, retry the primary model with a larger output budget.
-      console.warn(`Fallback model ${this.cloudflareFallbackModel} failed for one region: ${error?.message || error}. Retrying ${this.cloudflareModel}.`);
-      raw = await this.runCloudflareLlm(
-        [
-          { role: 'system', content: singleSystemPrompt },
-          { role: 'user', content: text },
-        ],
-        Math.min(1024, this.cloudflareMaxTokens),
-        this.cloudflareModel,
-      );
-    }
-
-    const parsed = this.extractLlmJson(raw);
-    const fromJson = cleanText(
-      parsed?.translation ?? parsed?.translated ?? parsed?.text ?? parsed?.translations?.[0]?.text ?? '',
-    );
-    const plain = cleanText(raw.replace(/^```\w*\s*/i, '').replace(/\s*```$/i, '').replace(/^['\"]|['\"]$/g, ''));
-    const cleaned = fromJson || plain;
-    if (!cleaned) throw new Error('Cloudflare fallback returned an empty translation');
-    if (this.looksUntranslated(text, cleaned)) {
-      throw new Error(`Cloudflare fallback echoed the English source instead of translating: ${text.slice(0, 120)}`);
-    }
-    return cleaned;
-  }
-
-  private async translateMissingWithFallback(sourceTexts: string[], output: Array<string | null>): Promise<string[]> {
-    const missing = output.map((value, index) => (value ? -1 : index)).filter((index) => index >= 0);
-    let cursor = 0;
-    const worker = async () => {
-      while (true) {
-        const missingIndex = cursor;
-        cursor += 1;
-        if (missingIndex >= missing.length) return;
-        const index = missing[missingIndex];
-        try {
-          output[index] = await this.translateOneFallback(sourceTexts[index]);
-        } catch (error: any) {
-          // One difficult OCR region must never make the whole manga page fail.
-          // Keep the original text for that region and preserve translations that
-          // succeeded elsewhere on the page.
-          console.warn(
-            `Translation fallback failed for region ${index}; keeping source text: ${error?.message || error}`,
-          );
-          output[index] = sourceTexts[index];
-        }
-      }
-    };
-    const workers: Promise<void>[] = [];
-    const count = Math.min(this.fallbackConcurrency, Math.max(1, missing.length));
-    for (let i = 0; i < count; i += 1) workers.push(worker());
-    if (missing.length) await Promise.all(workers);
-    return output.map((value, index) => cleanText(value || sourceTexts[index]) || sourceTexts[index]);
-  }
 
   /**
-   * Translate all regions on one page in a single LLM request. Besides reducing
-   * API round-trips, this lets short bubbles use nearby dialogue as context.
+   * Translate all useful regions on one page in a single LLM request. By
+   * default there are no LLM retries: malformed or missing regions remain
+   * untranslated to protect the daily Workers AI neuron budget.
    */
-  private async translateEnglishToVietnamese(texts: string[]): Promise<string[]> {
+  private async translateEnglishToVietnamese(texts: string[]): Promise<Array<string | null>> {
     if (!texts.length) return [];
     const regions = texts.map((text, id) => ({ id, text }));
     const userPrompt = [
-      'Translate every region below from English to Vietnamese with faithful meaning first and natural Vietnamese second.',
-      'One region may have come from several printed lines inside the same speech bubble; it is still ONE complete sentence/utterance.',
-      'Do not reinterpret a clear English action word into an unrelated meaning just to fit the scene.',
-      'Use neighboring regions only as light context. Translate the current region from its own English wording.',
-      'Return the same ids exactly once and return JSON only.',
+      '/no_think',
+      'Translate every region from English to Vietnamese.',
+      'Use concise natural Vietnamese manga style. Return translation only; never explain the request.',
+      'Return the same ids exactly once and JSON only.',
       JSON.stringify({ regions }),
     ].join('\n');
 
@@ -747,17 +737,17 @@ export class EnglishVietnameseTranslationService {
 
     let parsed: Array<string | null> = new Array(texts.length).fill(null);
     try {
-      const raw = await this.runCloudflareLlm(messages, this.cloudflareMaxTokens, this.cloudflareModel);
+      const raw = await this.runCloudflareLlm(
+        messages,
+        this.pageOutputBudget(texts),
+        this.cloudflareModel,
+      );
       parsed = this.translationsFromLlm(raw, texts);
     } catch (error: any) {
-      console.warn(`Primary manga model ${this.cloudflareModel} failed: ${error?.message || error}`);
+      console.warn(`Primary manga translation failed; no automatic retry to save neurons: ${error?.message || error}`);
     }
 
-    // Qwen3 is a reasoning model and can occasionally spend the entire output
-    // budget on reasoning_content, leaving message.content empty. It can also
-    // return malformed JSON. In either case retry the WHOLE PAGE with a
-    // non-reasoning model that Cloudflare officially supports in JSON Mode.
-    if (parsed.some((value) => !value)) {
+    if (parsed.some((value) => !value) && this.allowFallback) {
       try {
         const fallbackRaw = await this.runPageFallback(messages);
         const fallbackParsed = this.translationsFromLlm(fallbackRaw, texts);
@@ -765,14 +755,18 @@ export class EnglishVietnameseTranslationService {
           if (!parsed[i] && fallbackParsed[i]) parsed[i] = fallbackParsed[i];
         }
       } catch (error: any) {
-        console.warn(`Page fallback model failed: ${error?.message || error}`);
+        console.warn(`Optional page fallback failed: ${error?.message || error}`);
       }
     }
 
-    if (parsed.some((value) => !value)) {
-      console.warn('Cloudflare page translation is still incomplete; translating only missing regions individually.');
+    const missing = parsed.filter((value) => !value).length;
+    if (missing) {
+      console.warn(
+        `Translation incomplete: ${missing}/${texts.length} region(s) left in original artwork; ` +
+        `${this.allowFallback ? 'page fallback was attempted once' : 'fallback/retry is disabled to save neurons'}.`,
+      );
     }
-    return this.translateMissingWithFallback(texts, parsed);
+    return parsed;
   }
 
   private cacheKey(context: PageJobContext): string {
@@ -797,7 +791,17 @@ export class EnglishVietnameseTranslationService {
       const raw = await fs.readFile(path.join(this.cacheDir, `${cacheKey}.json`), 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && parsed.version === CACHE_VERSION && parsed.data && parsed.data.status === 'ready') {
-        return { ...parsed.data, cached: true } as TranslatedPage;
+        const data = parsed.data as TranslatedPage;
+        const regions = Array.isArray(data.regions)
+          ? data.regions.filter((region) => {
+              const source = cleanText(region?.text || '');
+              const translated = cleanText(region?.translated || '');
+              if (this.localSkipReason(source)) return false;
+              if (this.looksLikeMetaResponse(source, translated)) return false;
+              return !!translated;
+            })
+          : [];
+        return { ...data, regions, cached: true } as TranslatedPage;
       }
     } catch (_error) {}
     return null;
@@ -824,19 +828,45 @@ export class EnglishVietnameseTranslationService {
     const job = (async () => {
       const image = await this.fetchProviderImage(context.provider, context.imageUrl);
       const ocr = await this.ocrEnglish(image);
-      const sourceTexts = ocr.regions.map((region) => region.text);
-      const translations = await this.translateEnglishToVietnamese(sourceTexts);
+      const candidates: Array<{ region: OcrRegion; originalIndex: number }> = [];
+      const skippedReasons: Record<string, number> = {};
+      ocr.regions.forEach((region, originalIndex) => {
+        const reason = this.localSkipReason(region.text);
+        if (reason) {
+          skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+        } else {
+          candidates.push({ region, originalIndex });
+        }
+      });
+
+      const candidateTexts = candidates.map((item) => item.region.text);
+      const translations = await this.translateEnglishToVietnamese(candidateTexts);
+      const translatedRegions: TranslationRegion[] = [];
+      candidates.forEach((item, candidateIndex) => {
+        const translated = cleanText(translations[candidateIndex] || '');
+        if (!translated) return;
+        translatedRegions.push({
+          text: item.region.text,
+          translated,
+          box: item.region.box,
+        });
+      });
+
+      const skippedCount = ocr.regions.length - candidates.length;
+      if (skippedCount) {
+        const summary = Object.keys(skippedReasons).map((reason) => `${reason}:${skippedReasons[reason]}`).join(', ');
+        console.info(`Skipped ${skippedCount} OCR region(s) locally before Cloudflare (${summary}).`);
+      }
+
       const data: TranslatedPage = {
         status: 'ready',
         sourceLanguage: SOURCE_LANGUAGE,
         targetLanguage: TARGET_LANGUAGE,
         imageWidth: ocr.imageWidth,
         imageHeight: ocr.imageHeight,
-        regions: ocr.regions.map((region, index) => ({
-          text: region.text,
-          translated: translations[index] || region.text,
-          box: region.box,
-        })),
+        // Skipped SFX/noise/names and failed translations are omitted entirely,
+        // so the original manga lettering stays visible with no redundant box.
+        regions: translatedRegions,
         cached: false,
       };
       await this.writeCache(key, data);
