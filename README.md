@@ -114,3 +114,10 @@ Kindle Voyage ES5 v16 adds a left Previous-page rail, direct tap-to-next reading
 - Proper names and URLs may remain unchanged without being treated as failed translation.
 - A single failed OCR region no longer aborts translation for the whole page.
 - Successfully translated regions are still shown; only the failed region falls back to its source text.
+
+## ES5 v18: five-page reading window + lean translation
+
+- While reading, the Kindle retains a five-page image window: two previous pages, the current page, and two following pages. Near chapter boundaries the window naturally contains fewer pages.
+- VI ON translates the current page immediately and warms exactly one next page in the background. The current page is no longer duplicated in the prefetch queue.
+- The Kindle keeps the five most recently viewed translation results in a small in-memory hot cache, so stepping back through recently read pages does not even need another translation HTTP request.
+- The server-side `.cache/en-vi-translation/` cache is still preserved as the longer-lived quota-saving layer, so revisiting older translated pages should not consume Cloudflare/OCR quota again while that server cache still exists.

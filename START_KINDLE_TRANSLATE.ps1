@@ -5,7 +5,7 @@ param(
   [string]$CloudflareAccountId,
   [Parameter(Mandatory=$true)]
   [string]$CloudflareApiToken,
-  [int]$PrefetchAhead = 3
+  [int]$PrefetchAhead = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +23,7 @@ $env:CLOUDFLARE_MANGA_LLM_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8'
 $env:CLOUDFLARE_FALLBACK_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast'
 $env:CLOUDFLARE_MAX_TOKENS = '3072'
 $env:MANGA_TRANSLATION = 'true'
-$env:TRANSLATION_PREFETCH_AHEAD = [string][Math]::Max(0, [Math]::Min(6, $PrefetchAhead))
+$env:TRANSLATION_PREFETCH_AHEAD = [string][Math]::Max(0, [Math]::Min(1, $PrefetchAhead))
 
 Write-Host 'Starting Kindle server with OCR.Space + Cloudflare manga LLM EN -> VI translation...' -ForegroundColor Green
 Write-Host "Cloudflare account: $CloudflareAccountId"

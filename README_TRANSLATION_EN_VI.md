@@ -69,7 +69,7 @@ $env:CLOUDFLARE_ACCOUNT_ID="YOUR_ACCOUNT_ID"
 $env:CLOUDFLARE_API_TOKEN="YOUR_API_TOKEN"
 $env:CLOUDFLARE_MANGA_LLM_MODEL="@cf/qwen/qwen3-30b-a3b-fp8"
 $env:MANGA_TRANSLATION="true"
-$env:TRANSLATION_PREFETCH_AHEAD="3"
+$env:TRANSLATION_PREFETCH_AHEAD="1"
 ```
 
 Optional tuning:
@@ -123,7 +123,7 @@ WeebCentral page
     -> Kindle overlays Vietnamese on the original image
 ```
 
-The existing warm-ahead behavior remains: the current page is processed immediately and up to `TRANSLATION_PREFETCH_AHEAD` later pages are queued. Successful results remain in `.cache/en-vi-translation/` by default.
+v18 translates the current page on demand and warms only the immediately following page when `TRANSLATION_PREFETCH_AHEAD=1`. The Kindle also keeps the five most recently viewed translation results in a small in-memory hot cache for instant backtracking. Successful results remain in `.cache/en-vi-translation/` on the server as a longer-lived quota-saving cache.
 
 ## Prompt behavior
 

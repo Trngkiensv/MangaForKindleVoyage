@@ -263,7 +263,7 @@ export function normalizeOcrSpaceLines(linesInput: any[]): OcrRegion[] {
 export class EnglishVietnameseTranslationService {
   readonly sourceLanguage = SOURCE_LANGUAGE;
   readonly targetLanguage = TARGET_LANGUAGE;
-  readonly prefetchAhead = positiveInt(process.env.TRANSLATION_PREFETCH_AHEAD, 3, 0, 6);
+  readonly prefetchAhead = positiveInt(process.env.TRANSLATION_PREFETCH_AHEAD, 1, 0, 1);
 
   private readonly enabledByEnv = boolEnv(process.env.MANGA_TRANSLATION, true);
   private readonly cacheDir = path.resolve(

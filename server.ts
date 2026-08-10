@@ -178,6 +178,8 @@ app.get('/api/translation/chapter/:id/prefetch', async (req, res) => {
     const ahead = Math.max(0, Math.min(status.prefetchAhead, isFinite(requestedAhead) ? requestedAhead : status.prefetchAhead));
     const pages = await getCachedChapterPages(provider, req.params.id);
     const pageList = pages.pages && pages.pages.length ? pages.pages : pages.dataSaverPages || [];
+    const replaceQueued = String(req.query.replace || '') === '1';
+    const cancelled = replaceQueued ? translationService.cancelPrefetch(req.params.id).cancelled : 0;
     let queued = 0;
     for (let pageNumber = fromPage; pageNumber <= Math.min(pageList.length, fromPage + ahead); pageNumber += 1) {
       try {
@@ -187,7 +189,7 @@ app.get('/api/translation/chapter/:id/prefetch', async (req, res) => {
       } catch (_error) {}
     }
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ ok: true, queued, fromPage, ahead });
+    return res.json({ ok: true, queued, cancelled, fromPage, ahead });
   } catch (error: any) {
     console.error('Translation prefetch error:', error);
     return res.status(502).json({ error: error?.message || String(error) });

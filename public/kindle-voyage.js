@@ -29,9 +29,13 @@
         translationLoading: false,
         translationError: "",
         translationRequestSerial: 0,
-        translationPrefetchAhead: 3,
+        translationPrefetchAhead: 1,
+        translationPageCache: {},
+        translationCacheOrder: [],
+        translationCacheLimit: 5,
         preloadImages: [],
-        preloadCount: 2,
+        preloadBeforeCount: 2,
+        preloadAfterCount: 2,
         loading: false
     };
 
@@ -1269,6 +1273,39 @@
         layer.innerHTML = html;
     }
 
+    function translationCacheKey(chapterId, pageNumber) {
+        return text(chapterId) + "::" + text(pageNumber);
+    }
+
+    function getHotTranslation(chapterId, pageNumber) {
+        var key = translationCacheKey(chapterId, pageNumber);
+        var data = state.translationPageCache[key];
+        var order = state.translationCacheOrder;
+        var i;
+        if (!data) return null;
+        for (i = order.length - 1; i >= 0; i -= 1) {
+            if (order[i] === key) order.splice(i, 1);
+        }
+        order.push(key);
+        return data;
+    }
+
+    function putHotTranslation(chapterId, pageNumber, data) {
+        var key, order, i, removed;
+        if (!data || data.status !== "ready") return;
+        key = translationCacheKey(chapterId, pageNumber);
+        order = state.translationCacheOrder;
+        state.translationPageCache[key] = data;
+        for (i = order.length - 1; i >= 0; i -= 1) {
+            if (order[i] === key) order.splice(i, 1);
+        }
+        order.push(key);
+        while (order.length > state.translationCacheLimit) {
+            removed = order.shift();
+            if (removed) delete state.translationPageCache[removed];
+        }
+    }
+
     function cancelTranslationPrefetch(chapterId) {
         if (!chapterId) return;
         xhrGet(
@@ -1297,21 +1334,29 @@
             return;
         }
         requestCurrentTranslation();
-        prefetchCurrentTranslations();
+        prefetchNextTranslation();
         updateReaderControls();
     }
 
     function requestCurrentTranslation() {
-        var serial, pageNumber, chapterId, url;
+        var serial, pageNumber, chapterId, url, hot;
         if (!state.translationAvailable || !state.translationEnabled || !state.currentChapterId) return;
         serial = state.translationRequestSerial + 1;
         state.translationRequestSerial = serial;
         pageNumber = state.pageIndex + 1;
         chapterId = state.currentChapterId;
-        state.translationData = null;
+        hot = getHotTranslation(chapterId, pageNumber);
         state.translationError = "";
-        state.translationLoading = true;
         clearTranslationOverlay();
+        if (hot) {
+            state.translationLoading = false;
+            state.translationData = hot;
+            updateReaderControls();
+            renderTranslationOverlay();
+            return;
+        }
+        state.translationData = null;
+        state.translationLoading = true;
         updateReaderControls();
         url = "/api/translation/chapter/" + encodeURIComponent(chapterId) + "/page/" + pageNumber;
         xhrGet(url, function (err, json) {
@@ -1324,32 +1369,44 @@
             } else {
                 state.translationError = "";
                 state.translationData = json;
+                putHotTranslation(chapterId, pageNumber, json);
             }
             updateReaderControls();
             renderTranslationOverlay();
         });
     }
 
-    function prefetchCurrentTranslations() {
-        var pageNumber, url;
+    function prefetchNextTranslation() {
+        var nextPageNumber, count, url;
         if (!state.translationAvailable || !state.translationEnabled || !state.currentChapterId) return;
-        pageNumber = state.pageIndex + 1;
-        url = "/api/translation/chapter/" + encodeURIComponent(state.currentChapterId) + "/prefetch?from=" + pageNumber + "&ahead=" + state.translationPrefetchAhead;
+        if (state.translationPrefetchAhead < 1) return;
+        count = currentPageCount();
+        nextPageNumber = state.pageIndex + 2;
+        if (nextPageNumber > count) return;
+
+        // Keep only the useful warm-ahead job. The current page is requested
+        // separately at high priority; background translation warms exactly
+        // one following page and never re-queues the current page. replace=1
+        // atomically drops stale not-yet-started jobs before queuing this page.
+        url = "/api/translation/chapter/" + encodeURIComponent(state.currentChapterId) + "/prefetch?from=" + nextPageNumber + "&ahead=0&replace=1";
         xhrGet(url, function () {});
     }
 
-    function preloadNextImages() {
-        var list = [], count = currentPageCount(), i, index, image, url;
+    function preloadNearbyImages() {
+        var list = [], count = currentPageCount(), offset, index, image, url;
         state.preloadImages = [];
-        for (i = 1; i <= state.preloadCount; i += 1) {
-            index = state.pageIndex + i;
-            if (index >= count) break;
+        for (offset = -state.preloadBeforeCount; offset <= state.preloadAfterCount; offset += 1) {
+            if (offset === 0) continue;
+            index = state.pageIndex + offset;
+            if (index < 0 || index >= count) continue;
             url = currentPageUrl(index);
             if (!url) continue;
             image = new Image();
             image.src = url;
             list.push(image);
         }
+        // Together with #pageImage (the current page), these four retained
+        // Image objects form a five-page reading window: -2, -1, 0, +1, +2.
         state.preloadImages = list;
     }
 
@@ -1377,8 +1434,8 @@
         state.translationError = "";
         clearTranslationOverlay();
         requestCurrentTranslation();
-        prefetchCurrentTranslations();
-        preloadNextImages();
+        prefetchNextTranslation();
+        preloadNearbyImages();
 
         // Do not reset width/height to auto here. On the Voyage that causes a
         // visible 100% -> saved zoom jump while the next page is loading.
@@ -1579,7 +1636,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v17 started. VI defaults OFF; translation queue is cancelable. Testing local API...", false);
+        setStatus("ES5 v18 started. 5-page image window + current/next translation + 5-page hot translation cache. Testing local API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
@@ -1591,7 +1648,8 @@
             xhrGet("/api/translation/status", function (translationErr, translationInfo) {
                 if (!translationErr && translationInfo) {
                     state.translationAvailable = !!translationInfo.enabled;
-                    state.translationPrefetchAhead = parseInt(translationInfo.prefetchAhead, 10) || 3;
+                    state.translationPrefetchAhead = parseInt(translationInfo.prefetchAhead, 10);
+                    if (!isFinite(state.translationPrefetchAhead)) state.translationPrefetchAhead = 1;
                 } else {
                     state.translationAvailable = false;
                 }
