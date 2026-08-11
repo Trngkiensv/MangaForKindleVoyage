@@ -128,3 +128,31 @@ a { color: #000; }
 /* ES5 v22: synchronized saved buttons on manga cards */
 .save-manga-card { margin-left: 5px; }
 .save-manga-card:disabled { color: #777; border-color: #777; }
+
+/* ES5 v23: lightweight Google Drive text-book reader */
+.book-item { border: 2px solid #000; padding: 10px; margin: 8px 0; }
+.book-title { font-family: Georgia, serif; font-size: 19px; font-weight: bold; margin-bottom: 4px; }
+.book-meta { font-size: 12px; font-weight: bold; }
+.book-resume { margin-top: 5px; font-size: 13px; }
+.book-search-row { width: 100%; margin: 5px 0 8px 0; }
+.book-search { width: 68%; }
+.book-reader-active { background: #fff; overflow-x: hidden; }
+.book-reader-active #app { width: 100%; max-width: none; margin: 0; }
+.book-reader-active .topbar, .book-reader-active #status { display: none; }
+.book-reader-active .content { padding: 0; margin: 0; width: 100%; max-width: none; }
+.book-reader { width: 100%; margin: 0; padding: 0; background: #fff; }
+.book-control-shell { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: #fff; border-bottom: 2px solid #000; padding: 3px 2px; }
+.book-control-spacer { width: 100%; height: 58px; }
+.book-reader-row { width: 100%; text-align: center; white-space: nowrap; }
+.book-reader-btn { width: 18%; min-width: 54px; min-height: 44px; margin: 1px; padding: 7px 2px; font-size: 14px; }
+.book-section-count { display: inline-block; width: 16%; min-width: 48px; font-size: 14px; font-weight: bold; text-align: center; vertical-align: middle; }
+.book-settings { border-top: 1px solid #000; padding: 4px 2px; background: #fff; }
+.book-setting-row { width: 100%; text-align: center; white-space: nowrap; }
+.book-setting-row .btn { width: 29%; margin: 2px 1px; padding: 7px 2px; font-size: 13px; }
+.book-setting-label { display: inline-block; width: 36%; font-size: 13px; font-weight: bold; text-align: center; vertical-align: middle; }
+.book-text { max-width: 760px; margin: 0 auto; padding-top: 14px; padding-bottom: 60px; color: #000; background: #fff; text-align: left; word-wrap: break-word; overflow-wrap: break-word; }
+.book-text p { margin-top: 0.7em; margin-bottom: 0.7em; }
+.book-text h1, .book-text h2, .book-text h3, .book-text h4, .book-text h5, .book-text h6 { line-height: 1.2; margin-top: 1em; margin-bottom: 0.5em; }
+.book-text blockquote { margin-left: 1.2em; margin-right: 0.5em; }
+.book-text pre, .book-text code { white-space: pre-wrap; word-wrap: break-word; }
+.book-reading-title { border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 14px; font-family: Georgia, serif; font-weight: bold; font-size: 0.9em; }

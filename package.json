@@ -17,7 +17,9 @@
     "react": "17.0.2",
     "react-dom": "17.0.2",
     "sharp": "^0.34.3",
-    "whatwg-fetch": "^3.6.20"
+    "whatwg-fetch": "^3.6.20",
+    "@lingo-reader/epub-parser": "^0.4.6",
+    "@lingo-reader/mobi-parser": "^0.4.6"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",

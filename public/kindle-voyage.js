@@ -53,6 +53,20 @@
         savedPages: 1,
         savedMangaIds: {},
         savedMangaKnown: {},
+        booksConfigured: false,
+        booksPage: 1,
+        booksPages: 1,
+        currentBook: null,
+        currentBookSection: null,
+        bookSectionIndex: 0,
+        bookSettingsOpen: false,
+        bookFontSize: 22,
+        bookLineHeight: 155,
+        bookMargin: 18,
+        bookFont: "serif",
+        bookProgressSaveTimer: null,
+        bookProgressDirty: false,
+        bookProgressDebounceMs: 2500,
         loading: false
     };
 
@@ -93,6 +107,14 @@
     }
 
     function leaveReaderMode() {
+        if (document.body.className === "book-reader-active") {
+            forceSaveBookProgress();
+            window.onscroll = null;
+            if (state.bookProgressSaveTimer) {
+                window.clearTimeout(state.bookProgressSaveTimer);
+                state.bookProgressSaveTimer = null;
+            }
+        }
         // A page turn is debounced to keep the Voyage responsive, but leaving
         // the reader is a durability boundary: flush the newest page first.
         if (document.body.className === "reader-active") forceSavePageProgress();
@@ -218,6 +240,14 @@
             state.quality = s.quality;
         if (s.zoomPercent && !isNaN(parseInt(s.zoomPercent, 10)))
             state.zoomPercent = parseInt(s.zoomPercent, 10);
+        if (s.bookFontSize && !isNaN(parseInt(s.bookFontSize, 10)))
+            state.bookFontSize = Math.max(14, Math.min(38, parseInt(s.bookFontSize, 10)));
+        if (s.bookLineHeight && !isNaN(parseInt(s.bookLineHeight, 10)))
+            state.bookLineHeight = Math.max(110, Math.min(220, parseInt(s.bookLineHeight, 10)));
+        if (s.bookMargin && !isNaN(parseInt(s.bookMargin, 10)))
+            state.bookMargin = Math.max(0, Math.min(60, parseInt(s.bookMargin, 10)));
+        if (s.bookFont === "serif" || s.bookFont === "sans" || s.bookFont === "mono")
+            state.bookFont = s.bookFont;
         // Translation is intentionally OFF on every fresh app start/session.
         // Do not restore an old VI ON value from localStorage: this prevents
         // OCR.Space / Cloudflare usage until the reader explicitly enables VI.
@@ -228,7 +258,11 @@
         saveStore(SETTINGS_KEY, {
             fitMode: state.fitMode,
             quality: state.quality,
-            zoomPercent: state.zoomPercent
+            zoomPercent: state.zoomPercent,
+            bookFontSize: state.bookFontSize,
+            bookLineHeight: state.bookLineHeight,
+            bookMargin: state.bookMargin,
+            bookFont: state.bookFont
         });
     }
 
@@ -2165,6 +2199,309 @@
         }
     }
 
+
+    function bookFontFamily() {
+        if (state.bookFont === "sans") return "Arial, Helvetica, sans-serif";
+        if (state.bookFont === "mono") return "Courier New, Courier, monospace";
+        return "Georgia, Times New Roman, serif";
+    }
+
+    function bookScrollRatio() {
+        var doc = document.documentElement;
+        var body = document.body;
+        var top = typeof window.pageYOffset === "number" ? window.pageYOffset : (doc.scrollTop || body.scrollTop || 0);
+        var height = Math.max(doc.scrollHeight || 0, body.scrollHeight || 0) - (window.innerHeight || doc.clientHeight || 0);
+        if (height <= 0) return 0;
+        return Math.max(0, Math.min(10000, Math.round((top / height) * 10000)));
+    }
+
+    function bookScrollToRatio(ratio) {
+        ratio = parseInt(ratio, 10);
+        if (isNaN(ratio) || ratio < 0) ratio = 0;
+        if (ratio > 10000) ratio = 10000;
+        window.setTimeout(function () {
+            var doc = document.documentElement;
+            var body = document.body;
+            var height = Math.max(doc.scrollHeight || 0, body.scrollHeight || 0) - (window.innerHeight || doc.clientHeight || 0);
+            window.scrollTo(0, height > 0 ? Math.round(height * ratio / 10000) : 0);
+        }, 180);
+    }
+
+    function bookProgressPayload() {
+        if (!state.currentBook) return null;
+        return {
+            driveFileId: state.currentBook.id,
+            bookTitle: state.currentBook.title || state.currentBook.name || "Book",
+            sectionIndex: state.bookSectionIndex,
+            sectionCount: parseInt(state.currentBook.sectionCount, 10) || 0,
+            scrollRatio: bookScrollRatio(),
+            clientMillis: new Date().getTime()
+        };
+    }
+
+    function sendBookProgress(done) {
+        var payload;
+        if (!state.authUser || !state.currentBook) {
+            state.bookProgressDirty = false;
+            if (done) done();
+            return;
+        }
+        payload = bookProgressPayload();
+        if (!payload) { if (done) done(); return; }
+        state.bookProgressDirty = false;
+        xhrPost("/api/books/progress", payload, function () {
+            if (done) done();
+        });
+    }
+
+    function scheduleBookProgressSave() {
+        if (!state.authUser || !state.currentBook) return;
+        state.bookProgressDirty = true;
+        if (state.bookProgressSaveTimer) window.clearTimeout(state.bookProgressSaveTimer);
+        state.bookProgressSaveTimer = window.setTimeout(function () {
+            state.bookProgressSaveTimer = null;
+            if (state.bookProgressDirty) sendBookProgress();
+        }, state.bookProgressDebounceMs);
+    }
+
+    function forceSaveBookProgress(done) {
+        if (state.bookProgressSaveTimer) {
+            window.clearTimeout(state.bookProgressSaveTimer);
+            state.bookProgressSaveTimer = null;
+        }
+        if (!state.authUser || !state.currentBook) { if (done) done(); return; }
+        sendBookProgress(done);
+    }
+
+    function bookScrollHandler() {
+        scheduleBookProgressSave();
+    }
+
+    function renderBooksPager(id, page, pages) {
+        var html = '<div id="' + id + '" class="data-pager">';
+        html += '<button type="button" class="btn book-page-prev"' + (page <= 1 ? ' disabled="disabled"' : '') + '>Prev</button>';
+        html += '<span class="data-page-label">Page ' + page + ' / ' + pages + '</span>';
+        html += '<button type="button" class="btn book-page-next"' + (page >= pages ? ' disabled="disabled"' : '') + '>Next</button>';
+        html += '</div>';
+        return html;
+    }
+
+    function bindBooksPager(id, page, pages, query) {
+        var root = el(id), prev, next;
+        if (!root) return;
+        prev = root.getElementsByClassName ? root.getElementsByClassName("book-page-prev")[0] : null;
+        next = root.getElementsByClassName ? root.getElementsByClassName("book-page-next")[0] : null;
+        if (prev && page > 1) prev.onclick = function () { showBooks(page - 1, query); };
+        if (next && page < pages) next.onclick = function () { showBooks(page + 1, query); };
+    }
+
+    function formatBookSize(bytes) {
+        bytes = parseInt(bytes, 10) || 0;
+        if (bytes >= 1048576) return (Math.round(bytes / 104857.6) / 10) + " MB";
+        if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
+        return bytes ? bytes + " B" : "";
+    }
+
+    function showBooks(pageNumber, query) {
+        var q = typeof query === "string" ? query : "";
+        leaveReaderMode();
+        pageNumber = parseInt(pageNumber, 10);
+        if (isNaN(pageNumber) || pageNumber < 1) pageNumber = 1;
+        setStatus("Loading text books from Google Drive...", false);
+        showHtml('<div class="heading">Books</div><div class="notice">Loading Google Drive folder...</div>');
+        xhrGet("/api/books?page=" + pageNumber + "&limit=40&q=" + encodeURIComponent(q), function (err, json) {
+            var html, items, i, item, progress, resumeText;
+            if (err || !json) {
+                setStatus(err || "Could not load books.", true);
+                showHtml('<div class="heading">Books</div><div class="notice">' + escapeHtml(err || "Could not load the configured Google Drive folder.") + '</div>');
+                return;
+            }
+            items = json.items || [];
+            state.booksPage = parseInt(json.page, 10) || 1;
+            state.booksPages = parseInt(json.pages, 10) || 1;
+            html = '<div class="heading">Text Books</div>';
+            html += '<div class="book-search-row"><input id="bookSearch" class="searchbox book-search" type="text" value="' + escapeHtml(q) + '" placeholder="Search this Drive folder"><button id="bookSearchBtn" class="btn btn-dark" type="button">Search</button></div>';
+            if (!state.authUser) html += '<div class="notice">Login to sync reading position. The ebook itself is never stored in Kindle localStorage.</div>';
+            html += renderBooksPager("booksPager", state.booksPage, state.booksPages);
+            if (!items.length) html += '<div class="notice">No EPUB/AZW3 files found in the configured folder.</div>';
+            for (i = 0; i < items.length; i += 1) {
+                item = items[i];
+                progress = item.progress || null;
+                resumeText = "";
+                if (progress) resumeText = 'Resume section ' + (parseInt(progress.section_index, 10) + 1) + (parseInt(progress.section_count, 10) ? ' / ' + parseInt(progress.section_count, 10) : '');
+                html += '<div class="book-item"><div class="book-title">' + escapeHtml(item.title || item.name) + '</div>' +
+                    '<div class="book-meta">' + escapeHtml(String(item.format || "").toUpperCase()) + (item.size ? ' - ' + escapeHtml(formatBookSize(item.size)) : '') + '</div>' +
+                    (resumeText ? '<div class="book-resume">' + escapeHtml(resumeText) + '</div>' : '') +
+                    '<button type="button" class="btn btn-wide book-open" data-id="' + escapeHtml(item.id) + '">' + (progress ? 'Continue Reading' : 'Open Book') + '</button></div>';
+            }
+            html += renderBooksPager("booksPagerBottom", state.booksPage, state.booksPages);
+            showHtml(html);
+            bindBooksPager("booksPager", state.booksPage, state.booksPages, q);
+            bindBooksPager("booksPagerBottom", state.booksPage, state.booksPages, q);
+            el("bookSearchBtn").onclick = function () { showBooks(1, trim(el("bookSearch").value)); };
+            el("bookSearch").onkeypress = function (evt) { evt = evt || window.event; if ((evt.keyCode || evt.which) === 13) showBooks(1, trim(el("bookSearch").value)); };
+            bindBookOpenButtons();
+            setStatus(json.total + " book files in Google Drive. Page " + state.booksPage + "/" + state.booksPages + ".", false);
+        });
+    }
+
+    function bindBookOpenButtons() {
+        var buttons = document.getElementsByTagName("button"), i, b, id;
+        for (i = 0; i < buttons.length; i += 1) {
+            b = buttons[i];
+            if ((" " + b.className + " ").indexOf(" book-open ") !== -1) {
+                id = b.getAttribute("data-id");
+                b.onclick = makeBookOpenHandler(id);
+            }
+        }
+    }
+
+    function makeBookOpenHandler(id) {
+        return function () { openBook(id); };
+    }
+
+    function openBook(fileId) {
+        leaveReaderMode();
+        setStatus("Opening ebook on server...", false);
+        showHtml('<div class="heading">Book</div><div class="notice">Downloading/parsing EPUB or AZW3 on the server. The first open may take a little longer.</div>');
+        xhrGet("/api/books/" + encodeURIComponent(fileId) + "/meta", function (err, meta) {
+            if (err || !meta) {
+                setStatus(err || "Could not parse book.", true);
+                return;
+            }
+            state.currentBook = meta;
+            state.bookSectionIndex = 0;
+            if (!state.authUser) {
+                loadBookSection(0, 0);
+                return;
+            }
+            xhrGet("/api/books/" + encodeURIComponent(fileId) + "/progress", function (progressErr, progressJson) {
+                var progress = !progressErr && progressJson ? progressJson.progress : null;
+                var index = progress ? parseInt(progress.section_index, 10) : 0;
+                var ratio = progress ? parseInt(progress.scroll_ratio, 10) : 0;
+                if (isNaN(index) || index < 0 || index >= meta.sectionCount) index = 0;
+                if (isNaN(ratio) || ratio < 0 || ratio > 10000) ratio = 0;
+                loadBookSection(index, ratio);
+            });
+        });
+    }
+
+    function bookSettingsHtml() {
+        var fontLabel = state.bookFont === "sans" ? "Sans" : (state.bookFont === "mono" ? "Mono" : "Serif");
+        if (!state.bookSettingsOpen) return "";
+        return '<div class="book-settings">' +
+            '<div class="book-setting-row"><button id="bookFontMinus" class="btn" type="button">A-</button><span class="book-setting-label">Font ' + state.bookFontSize + 'px</span><button id="bookFontPlus" class="btn" type="button">A+</button></div>' +
+            '<div class="book-setting-row"><button id="bookMarginMinus" class="btn" type="button">Margin -</button><span class="book-setting-label">' + state.bookMargin + 'px</span><button id="bookMarginPlus" class="btn" type="button">Margin +</button></div>' +
+            '<div class="book-setting-row"><button id="bookLineMinus" class="btn" type="button">Line -</button><span class="book-setting-label">' + (state.bookLineHeight / 100).toFixed(2) + '</span><button id="bookLinePlus" class="btn" type="button">Line +</button></div>' +
+            '<div class="book-setting-row"><button id="bookFontType" class="btn btn-wide" type="button">Typeface: ' + fontLabel + '</button></div></div>';
+    }
+
+    function renderBookReader(section, restoreRatio) {
+        var book = state.currentBook;
+        var index = parseInt(section.index, 10) || 0;
+        var count = parseInt(book.sectionCount, 10) || 1;
+        var html = '<div class="book-reader">' +
+            '<div id="bookControlShell" class="book-control-shell"><div class="book-reader-row">' +
+            '<button id="bookBack" class="btn book-reader-btn" type="button">Books</button>' +
+            '<button id="bookPrev" class="btn book-reader-btn" type="button"' + (index <= 0 ? ' disabled="disabled"' : '') + '>Prev</button>' +
+            '<span class="book-section-count">' + (index + 1) + '/' + count + '</span>' +
+            '<button id="bookNext" class="btn book-reader-btn" type="button"' + (index >= count - 1 ? ' disabled="disabled"' : '') + '>Next</button>' +
+            '<button id="bookAa" class="btn book-reader-btn" type="button">Aa</button>' +
+            '</div>' + bookSettingsHtml() + '</div><div id="bookControlSpacer" class="book-control-spacer"></div>' +
+            '<div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div>';
+        document.body.className = "book-reader-active";
+        el("view").innerHTML = html;
+        state.currentBookSection = section;
+        state.bookSectionIndex = index;
+        applyBookTextStyle();
+        bindBookReaderControls();
+        sizeBookControlSpacer();
+        window.onscroll = bookScrollHandler;
+        bookScrollToRatio(restoreRatio || 0);
+        setStatus("Reading " + (book.title || "book") + " - section " + (index + 1) + "/" + count + ".", false);
+    }
+
+    function sizeBookControlSpacer() {
+        window.setTimeout(function () {
+            var shell = el("bookControlShell"), spacer = el("bookControlSpacer");
+            if (shell && spacer) spacer.style.height = (shell.offsetHeight || 58) + "px";
+        }, 0);
+    }
+
+    function applyBookTextStyle() {
+        var node = el("bookText");
+        if (!node) return;
+        node.style.fontSize = state.bookFontSize + "px";
+        node.style.lineHeight = String(state.bookLineHeight / 100);
+        node.style.paddingLeft = state.bookMargin + "px";
+        node.style.paddingRight = state.bookMargin + "px";
+        node.style.fontFamily = bookFontFamily();
+    }
+
+    function changeBookSetting(kind, delta) {
+        if (kind === "font") state.bookFontSize = Math.max(14, Math.min(38, state.bookFontSize + delta));
+        if (kind === "margin") state.bookMargin = Math.max(0, Math.min(60, state.bookMargin + delta));
+        if (kind === "line") state.bookLineHeight = Math.max(110, Math.min(220, state.bookLineHeight + delta));
+        saveReaderSettings();
+        rerenderBookControlsKeepPosition();
+    }
+
+    function cycleBookFont() {
+        state.bookFont = state.bookFont === "serif" ? "sans" : (state.bookFont === "sans" ? "mono" : "serif");
+        saveReaderSettings();
+        rerenderBookControlsKeepPosition();
+    }
+
+    function rerenderBookControlsKeepPosition() {
+        var ratio = bookScrollRatio();
+        var section = state.currentBookSection;
+        if (!section) return;
+        renderBookReader(section, ratio);
+    }
+
+    function bindBookReaderControls() {
+        var index = state.bookSectionIndex;
+        var count = state.currentBook ? parseInt(state.currentBook.sectionCount, 10) || 1 : 1;
+        el("bookBack").onclick = function () { showBooks(state.booksPage || 1, ""); };
+        if (index > 0) el("bookPrev").onclick = function () { changeBookSection(index - 1); };
+        if (index < count - 1) el("bookNext").onclick = function () { changeBookSection(index + 1); };
+        el("bookAa").onclick = function () { state.bookSettingsOpen = !state.bookSettingsOpen; rerenderBookControlsKeepPosition(); };
+        if (state.bookSettingsOpen) {
+            el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
+            el("bookFontPlus").onclick = function () { changeBookSetting("font", 2); };
+            el("bookMarginMinus").onclick = function () { changeBookSetting("margin", -4); };
+            el("bookMarginPlus").onclick = function () { changeBookSetting("margin", 4); };
+            el("bookLineMinus").onclick = function () { changeBookSetting("line", -10); };
+            el("bookLinePlus").onclick = function () { changeBookSetting("line", 10); };
+            el("bookFontType").onclick = cycleBookFont;
+        }
+    }
+
+    function changeBookSection(index) {
+        forceSaveBookProgress(function () { loadBookSection(index, 0); });
+    }
+
+    function loadBookSection(index, restoreRatio) {
+        var book = state.currentBook;
+        if (!book) return;
+        index = parseInt(index, 10);
+        if (isNaN(index) || index < 0) index = 0;
+        if (index >= book.sectionCount) index = book.sectionCount - 1;
+        state.bookSectionIndex = index;
+        window.onscroll = null;
+        el("view").innerHTML = '<div class="notice">Loading book section...</div>';
+        window.scrollTo(0, 0);
+        xhrGet("/api/books/" + encodeURIComponent(book.id) + "/section/" + index, function (err, json) {
+            if (err || !json || !json.section) {
+                setStatus(err || "Could not load book section.", true);
+                return;
+            }
+            renderBookReader(json.section, restoreRatio || 0);
+            state.bookProgressDirty = true;
+            scheduleBookProgressSave();
+        });
+    }
+
     function makeIdHandler(id) {
         return function () {
             loadMangaById(id);
@@ -2184,6 +2521,7 @@
         el("searchBtn").onclick = doSearch;
         el("homeBtn").onclick = loadHome;
         el("randomBtn").onclick = loadRandomManga;
+        el("booksBtn").onclick = function () { showBooks(1, ""); };
         el("savedBtn").onclick = function () { showSaved(1); };
         el("historyBtn").onclick = function () { showHistory(1); };
         el("accountBtn").onclick = showAccount;
@@ -2193,7 +2531,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v22 started. Kindle JPEG covers + paged title + synced Saved state. Testing API...", false);
+        setStatus("ES5 v23 started. Google Drive EPUB/AZW3 text reader + manga reader. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
@@ -2203,6 +2541,9 @@
                 return;
             }
             checkAuth(function () {
+                xhrGet("/api/books/status", function (bookErr, bookInfo) {
+                    state.booksConfigured = !!(!bookErr && bookInfo && bookInfo.configured);
+                });
                 xhrGet("/api/translation/status", function (translationErr, translationInfo) {
                     if (!translationErr && translationInfo) {
                         state.translationAvailable = !!translationInfo.enabled;

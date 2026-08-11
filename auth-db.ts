@@ -181,6 +181,19 @@ export async function initAuthDatabase() {
         PRIMARY KEY (user_id, provider, manga_id)
       );
       CREATE INDEX IF NOT EXISTS saved_manga_user_idx ON saved_manga(user_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS book_progress (
+        user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        drive_file_id TEXT NOT NULL,
+        book_title TEXT NOT NULL DEFAULT '',
+        section_index INTEGER NOT NULL DEFAULT 0,
+        section_count INTEGER NOT NULL DEFAULT 0,
+        scroll_ratio INTEGER NOT NULL DEFAULT 0,
+        client_millis BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, drive_file_id)
+      );
+      CREATE INDEX IF NOT EXISTS book_progress_history_idx ON book_progress(user_id, updated_at DESC);
     `);
     initialized = true;
   })();
@@ -588,6 +601,76 @@ export async function saveManga(userId: number, provider: string, mangaId: strin
 export async function removeSavedManga(userId: number, provider: string, mangaId: string) {
   const db = await ensureReady();
   await db.query(`DELETE FROM saved_manga WHERE user_id = $1 AND provider = $2 AND manga_id = $3`, [userId, provider, mangaId]);
+}
+
+
+
+export async function getBookProgress(userId: number, driveFileIdRaw: unknown) {
+  const db = await ensureReady();
+  const driveFileId = String(driveFileIdRaw || '').slice(0, 1000);
+  if (!driveFileId) return null;
+  const result = await db.query(
+    `SELECT drive_file_id, book_title, section_index, section_count, scroll_ratio, updated_at
+       FROM book_progress
+      WHERE user_id = $1 AND drive_file_id = $2
+      LIMIT 1`,
+    [userId, driveFileId],
+  );
+  return result.rows[0] || null;
+}
+
+export async function getBookProgressMany(userId: number, driveFileIdsRaw: unknown) {
+  const db = await ensureReady();
+  const raw = Array.isArray(driveFileIdsRaw) ? driveFileIdsRaw : [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    const id = String(value || '').slice(0, 1000);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= 40) break;
+  }
+  if (!ids.length) return [];
+  const result = await db.query(
+    `SELECT drive_file_id, book_title, section_index, section_count, scroll_ratio, updated_at
+       FROM book_progress
+      WHERE user_id = $1 AND drive_file_id = ANY($2::text[])`,
+    [userId, ids],
+  );
+  return result.rows;
+}
+
+export async function saveBookProgress(userId: number, input: any) {
+  const db = await ensureReady();
+  const driveFileId = String(input.driveFileId || '').slice(0, 1000);
+  const bookTitle = String(input.bookTitle || '').slice(0, 1000);
+  let sectionIndex = parseInt(String(input.sectionIndex || '0'), 10);
+  let sectionCount = parseInt(String(input.sectionCount || '0'), 10);
+  let scrollRatio = parseInt(String(input.scrollRatio || '0'), 10);
+  let clientMillis = parseInt(String(input.clientMillis || Date.now()), 10);
+  if (!driveFileId) throw new Error('driveFileId is required');
+  if (!isFinite(sectionIndex) || sectionIndex < 0) sectionIndex = 0;
+  if (!isFinite(sectionCount) || sectionCount < 0) sectionCount = 0;
+  if (sectionCount && sectionIndex >= sectionCount) sectionIndex = sectionCount - 1;
+  if (!isFinite(scrollRatio) || scrollRatio < 0) scrollRatio = 0;
+  if (scrollRatio > 10000) scrollRatio = 10000;
+  if (!isFinite(clientMillis) || clientMillis < 0) clientMillis = Date.now();
+  await db.query(
+    `INSERT INTO book_progress
+       (user_id, drive_file_id, book_title, section_index, section_count, scroll_ratio, client_millis, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+     ON CONFLICT (user_id, drive_file_id)
+     DO UPDATE SET
+       book_title = EXCLUDED.book_title,
+       section_index = EXCLUDED.section_index,
+       section_count = EXCLUDED.section_count,
+       scroll_ratio = EXCLUDED.scroll_ratio,
+       client_millis = EXCLUDED.client_millis,
+       updated_at = NOW()
+     WHERE EXCLUDED.client_millis >= book_progress.client_millis`,
+    [userId, driveFileId, bookTitle, sectionIndex, sectionCount, scrollRatio, clientMillis],
+  );
 }
 
 export async function cleanupExpiredAuthData() {

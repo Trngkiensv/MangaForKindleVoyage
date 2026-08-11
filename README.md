@@ -171,3 +171,16 @@ See `NEON_ACCOUNT_SETUP.md` and `.env.example` for Render/Neon/email configurati
 - Kindle cover thumbnails are normalized to baseline JPEG through the server proxy for old Voyage WebKit compatibility.
 - **To title** always re-enters the normal 40-release chapter pager, including after direct resume from History.
 - Saved state is batch-synced from Neon on Search/Random lists. Cards show **Save** or **Remove Saved** consistently with the title page.
+
+## v23 Google Drive text-book reader
+
+The Kindle ES5 UI now has a **Books** section for `.epub` and `.azw3` files stored in one configured Google Drive folder.
+
+- Google Drive access is server-side only.
+- EPUB/AZW3 parsing is server-side; Kindle receives only the current sanitized text section.
+- Book list is paged at 40 files/page.
+- When logged in, book reading position is stored in Neon (`book_progress`).
+- Kindle localStorage keeps only small fixed reader preferences: font size, typeface, margin and line spacing.
+- Supported text-reader settings: font size, Serif/Sans/Mono, left/right margin, line spacing.
+
+See `GOOGLE_DRIVE_BOOKS_SETUP.md` for service-account and folder-sharing setup.

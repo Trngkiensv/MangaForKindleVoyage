@@ -5,10 +5,13 @@ import sharp from 'sharp';
 import { getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
+import { getDriveBookPage, getParsedDriveBook, googleBooksConfigured } from './books-drive';
 import {
   authDatabaseConfigured,
   cleanupExpiredAuthData,
   getHistory,
+  getBookProgress,
+  getBookProgressMany,
   getProgress,
   getReadChapterIds,
   getSavedManga,
@@ -25,6 +28,7 @@ import {
   resetPassword,
   saveManga,
   saveProgress,
+  saveBookProgress,
   type AuthUser,
 } from './auth-db';
 
@@ -375,6 +379,85 @@ app.delete('/api/reading/saved/:mangaId', async (req, res) => {
     return res.json({ ok: true, saved: false });
   } catch (error: any) {
     return res.status(500).json({ error: 'Could not remove saved manga' });
+  }
+});
+
+app.get('/api/books/status', async (_req, res) => {
+  res.json({ configured: googleBooksConfigured(), formats: ['epub', 'azw3'], pageSize: 40 });
+});
+
+app.get('/api/books', async (req, res) => {
+  try {
+    if (!googleBooksConfigured()) return res.status(503).json({ error: 'Google Drive books are not configured' });
+    const result: any = await getDriveBookPage(req.query.page, req.query.limit, req.query.q, req.query.refresh === '1');
+    const user = await sessionUser(req);
+    if (user && result.items.length) {
+      const progressRows: any[] = await getBookProgressMany(user.id, result.items.map((item: any) => item.id));
+      const progressById: Record<string, any> = {};
+      for (const row of progressRows) progressById[String(row.drive_file_id)] = row;
+      result.items = result.items.map((item: any) => ({ ...item, progress: progressById[item.id] || null }));
+    }
+    res.json(result);
+  } catch (error: any) {
+    res.status(502).json({ error: error?.message || 'Could not load Google Drive books' });
+  }
+});
+
+app.get('/api/books/:id/meta', async (req, res) => {
+  try {
+    if (!googleBooksConfigured()) return res.status(503).json({ error: 'Google Drive books are not configured' });
+    const book = await getParsedDriveBook(req.params.id);
+    res.json({
+      id: book.id,
+      name: book.name,
+      title: book.title,
+      author: book.author,
+      format: book.format,
+      modifiedTime: book.modifiedTime,
+      size: book.size,
+      sectionCount: book.sections.length,
+      sections: book.sections.map((section) => ({ index: section.index, title: section.title })),
+    });
+  } catch (error: any) {
+    res.status(502).json({ error: error?.message || 'Could not parse book' });
+  }
+});
+
+app.get('/api/books/:id/section/:index', async (req, res) => {
+  try {
+    if (!googleBooksConfigured()) return res.status(503).json({ error: 'Google Drive books are not configured' });
+    const book = await getParsedDriveBook(req.params.id);
+    let index = parseInt(String(req.params.index || '0'), 10);
+    if (!isFinite(index) || index < 0 || index >= book.sections.length) return res.status(404).json({ error: 'Book section not found' });
+    const section = book.sections[index];
+    res.json({
+      book: { id: book.id, title: book.title, author: book.author, format: book.format, sectionCount: book.sections.length },
+      section: { index: section.index, title: section.title, html: section.html },
+    });
+  } catch (error: any) {
+    res.status(502).json({ error: error?.message || 'Could not load book section' });
+  }
+});
+
+app.get('/api/books/:id/progress', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const progress = await getBookProgress(user.id, req.params.id);
+    res.json({ progress });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Could not load book progress' });
+  }
+});
+
+app.post('/api/books/progress', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    await saveBookProgress(user.id, req.body || {});
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'Could not save book progress' });
   }
 });
 
