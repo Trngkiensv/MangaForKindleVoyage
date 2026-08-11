@@ -9,6 +9,7 @@ import {
   cleanupExpiredAuthData,
   getHistory,
   getProgress,
+  getReadChapterIds,
   getSavedManga,
   getUserBySessionToken,
   initAuthDatabase,
@@ -279,6 +280,20 @@ app.post('/api/reading/progress', async (req, res) => {
   }
 });
 
+app.post('/api/reading/read-chapters', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    const chapterIds = await getReadChapterIds(user.id, provider.key, req.body?.mangaId, req.body?.chapterIds);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ chapterIds });
+  } catch (error: any) {
+    console.error('Read chapter marker error:', error);
+    return res.status(500).json({ error: 'Could not load read chapter markers' });
+  }
+});
+
 app.get('/api/reading/history', async (req, res) => {
   try {
     const user = await requireUser(req, res);
@@ -373,6 +388,39 @@ app.get('/api/provider/search', async (req, res) => {
   } catch (error: any) {
     console.error('Provider search error:', error);
     res.status(502).json({ error: error?.message || String(error) });
+  }
+});
+
+app.get('/api/provider/random', async (req, res) => {
+  try {
+    const provider = providerForRequest(req);
+    const requested = Math.max(1, Math.min(10, parseInt(String(req.query.limit || '10'), 10) || 10));
+    const pageSize = 24;
+    let data: any[] = [];
+    // Sample from a different provider search page on every press, then
+    // shuffle locally. Retry a shallower page if the sampled offset is empty.
+    for (let attempt = 0; attempt < 3 && data.length < requested; attempt += 1) {
+      const page = attempt === 2 ? 0 : Math.floor(Math.random() * 16);
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      params.set('offset', String(page * pageSize));
+      params.append('contentRating[]', 'safe');
+      params.append('contentRating[]', 'suggestive');
+      params.append('includes[]', 'cover_art');
+      const result = await provider.search(params);
+      data = result.data || [];
+    }
+    for (let i = data.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = data[i];
+      data[i] = data[j];
+      data[j] = tmp;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ data: data.slice(0, requested), total: data.length, limit: requested });
+  } catch (error: any) {
+    console.error('Random manga error:', error);
+    return res.status(502).json({ error: 'Could not load random manga' });
   }
 });
 

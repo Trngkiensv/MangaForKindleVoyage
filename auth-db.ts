@@ -472,6 +472,30 @@ export async function saveProgress(userId: number, provider: string, input: any)
   );
 }
 
+export async function getReadChapterIds(userId: number, provider: string, mangaIdRaw: unknown, chapterIdsRaw: unknown) {
+  const db = await ensureReady();
+  const mangaId = String(mangaIdRaw || '').slice(0, 1000);
+  const raw = Array.isArray(chapterIdsRaw) ? chapterIdsRaw : [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const value of raw) {
+    const id = String(value || '').slice(0, 1000);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= 100) break;
+  }
+  if (!mangaId || !ids.length) return [];
+  const result = await db.query(
+    `SELECT chapter_id
+       FROM reading_progress
+      WHERE user_id = $1 AND provider = $2 AND manga_id = $3
+        AND chapter_id = ANY($4::text[])`,
+    [userId, provider, mangaId, ids],
+  );
+  return result.rows.map((row: any) => String(row.chapter_id));
+}
+
 export async function getHistory(userId: number, pageRaw: unknown, limitRaw: unknown) {
   const db = await ensureReady();
   let page = parseInt(String(pageRaw || '1'), 10);

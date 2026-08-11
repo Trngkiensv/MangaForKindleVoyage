@@ -154,3 +154,13 @@ Only fixed-size reader settings (fit mode, image quality, zoom) remain persisten
 the Kindle. The five-page translation hot cache and image preload window remain RAM-only.
 
 See `NEON_ACCOUNT_SETUP.md` and `.env.example` for Render/Neon/email configuration.
+
+
+## v21 reader behavior
+
+- Five-page image window is retained as a sliding cache: after the initial window, moving one page normally creates only one new image preload.
+- Reading progress is debounced while paging and force-saved when leaving the reader or changing chapters.
+- Last page automatically opens the next chapter when one exists.
+- Reader button is labeled **To title**.
+- Saved manga chapter pages mark chapters already present in server reading progress with **(READ)**.
+- **Random** samples and displays up to 10 manga per press.

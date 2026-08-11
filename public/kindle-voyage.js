@@ -34,9 +34,13 @@
         translationPageCache: {},
         translationCacheOrder: [],
         translationCacheLimit: 5,
-        preloadImages: [],
+        preloadImages: {},
         preloadBeforeCount: 2,
         preloadAfterCount: 2,
+        progressSaveTimer: null,
+        progressDirty: false,
+        progressDebounceMs: 2000,
+        readChapterIds: {},
         authUser: null,
         authChecked: false,
         authDatabaseConfigured: false,
@@ -87,6 +91,9 @@
     }
 
     function leaveReaderMode() {
+        // A page turn is debounced to keep the Voyage responsive, but leaving
+        // the reader is a durability boundary: flush the newest page first.
+        if (document.body.className === "reader-active") forceSavePageProgress();
         // Leaving the reader makes warmed translation pages unnecessary. Stop
         // the client warmup chain and drop any legacy server-side queued jobs.
         state.translationPrefetchSerial += 1;
@@ -243,6 +250,7 @@
         state.authChecked = true;
         state.currentMangaSaved = false;
         state.currentMangaSavedKnown = false;
+        state.readChapterIds = {};
         refreshAccountButton();
     }
 
@@ -577,6 +585,21 @@
         });
     }
 
+    function loadRandomManga() {
+        leaveReaderMode();
+        setStatus("Picking 10 random manga...", false);
+        showHtml('<div class="heading">Random Manga</div><div class="notice">Loading...</div>');
+        xhrGet("/api/provider/random?limit=10&r=" + new Date().getTime(), function (err, json) {
+            if (err || !json) {
+                setStatus(err || "Could not load random manga.", true);
+                showHtml('<div class="heading">Random Manga</div><div class="notice">Random load failed. Try again.</div>');
+                return;
+            }
+            setStatus("10 random manga loaded. Tap Random again for another set.", false);
+            renderMangaList(json.data || [], "Random Manga");
+        });
+    }
+
     function doSearch() {
         leaveReaderMode();
         var query = trim(el("search").value);
@@ -646,6 +669,7 @@
         state.chapterLoading = false;
         state.currentMangaSaved = false;
         state.currentMangaSavedKnown = false;
+        state.readChapterIds = {};
         renderMangaDetail(manga, true);
         loadChapters(manga.id, 0);
         if (state.authUser) checkCurrentMangaSaved(manga);
@@ -786,7 +810,9 @@
                     : "No chapter releases on this page.",
                 false
             );
+            state.readChapterIds = {};
             renderMangaDetail(state.currentManga, false);
+            if (state.authUser && state.currentMangaSaved) loadReadMarkersForVisibleChapters();
         });
     }
 
@@ -879,6 +905,7 @@
             if (a.title && !a.volume) label += ": " + a.title;
             lang = a.translatedLanguage || a.language || "";
             external = a.externalUrl ? " [External]" : "";
+            if (state.currentMangaSaved && state.readChapterIds[ch.id]) label += " (READ)";
             html +=
                 '<button type="button" class="chapter chapter-open" data-index="' +
                 i +
@@ -955,7 +982,7 @@
         });
     }
 
-    function openChapterAtGlobalIndex(index) {
+    function openChapterAtGlobalIndex(index, startAtBeginning) {
         if (state.chapterNavigationLoading) return;
         if (index < 0) {
             setReaderMessage("Already at newest chapter.");
@@ -974,7 +1001,7 @@
                 return;
             }
             state.currentChapterGlobalIndex = index;
-            openChapter(data[0]);
+            openChapter(data[0], !!startAtBeginning);
         });
     }
 
@@ -1009,7 +1036,7 @@
         scan(0);
     }
 
-    function openRelativeChapter(indexDelta) {
+    function openRelativeChapter(indexDelta, startAtBeginning) {
         if (state.chapterNavigationLoading) return;
         state.chapterNavigationLoading = true;
         setReaderMessage("Finding adjacent chapter...");
@@ -1029,7 +1056,7 @@
                 setReaderMessage("Already at oldest chapter.");
                 return;
             }
-            openChapterAtGlobalIndex(target);
+            openChapterAtGlobalIndex(target, !!startAtBeginning);
         });
     }
 
@@ -1097,13 +1124,13 @@
         });
     }
 
-    function savePageProgress() {
+    function progressPayload() {
         var manga, chapter, a;
-        if (!state.authUser || !state.currentChapterId) return;
+        if (!state.authUser || !state.currentChapterId) return null;
         manga = state.currentManga;
         chapter = state.currentChapter;
         a = chapter && chapter.attributes ? chapter.attributes : {};
-        xhrPost("/api/reading/progress", {
+        return {
             mangaId: manga ? manga.id : "",
             mangaTitle: manga ? getTitle(manga) : "Manga",
             chapterId: state.currentChapterId,
@@ -1112,12 +1139,38 @@
             pageIndex: state.pageIndex,
             pageCount: currentPageCount(),
             clientMillis: new Date().getTime()
-        }, function (err) {
+        };
+    }
+
+    function savePageProgressNow() {
+        var payload = progressPayload();
+        if (!payload) return;
+        state.progressDirty = false;
+        if (state.currentMangaSaved && state.currentChapterId) state.readChapterIds[state.currentChapterId] = true;
+        xhrPost("/api/reading/progress", payload, function (err) {
             if (err && err === "Please log in") setAuthUser(null);
         });
     }
 
-    function openChapter(chapter) {
+    function schedulePageProgressSave() {
+        if (!state.authUser || !state.currentChapterId) return;
+        state.progressDirty = true;
+        if (state.progressSaveTimer) window.clearTimeout(state.progressSaveTimer);
+        state.progressSaveTimer = window.setTimeout(function () {
+            state.progressSaveTimer = null;
+            if (state.progressDirty && document.body.className === "reader-active") savePageProgressNow();
+        }, state.progressDebounceMs);
+    }
+
+    function forceSavePageProgress() {
+        if (state.progressSaveTimer) {
+            window.clearTimeout(state.progressSaveTimer);
+            state.progressSaveTimer = null;
+        }
+        if (state.progressDirty) savePageProgressNow();
+    }
+
+    function openChapter(chapter, startAtBeginning) {
         var a, previousChapterId;
         if (!chapter) return;
         a = chapter.attributes || {};
@@ -1129,8 +1182,10 @@
             return;
         }
         previousChapterId = state.currentChapterId;
-        if (previousChapterId && previousChapterId !== chapter.id)
+        if (previousChapterId && previousChapterId !== chapter.id) {
+            forceSavePageProgress();
             cancelTranslationPrefetch(previousChapterId);
+        }
         state.currentChapter = chapter;
         state.currentChapterId = chapter.id;
         state.pagesSaver = [];
@@ -1141,7 +1196,7 @@
         state.translationLoading = false;
         state.translationError = "";
         state.translationRequestSerial += 1;
-        state.preloadImages = [];
+        state.preloadImages = {};
         setStatus("Loading chapter pages...", false);
         showHtml(
             '<div class="heading">Reader</div><div class="notice">Loading page list...</div>'
@@ -1176,12 +1231,18 @@
                     setStatus("No pages in chapter.", true);
                     return;
                 }
-                loadSavedPage(chapter.id, currentPageCount(), function (savedPage) {
-                    if (chapter.id !== state.currentChapterId) return;
-                    state.pageIndex = savedPage;
+                if (startAtBeginning) {
+                    state.pageIndex = 0;
                     setStatus(state.authUser ? "Reader ready. Progress sync is on." : "Reader ready. Login to save progress.", false);
                     renderReader();
-                });
+                } else {
+                    loadSavedPage(chapter.id, currentPageCount(), function (savedPage) {
+                        if (chapter.id !== state.currentChapterId) return;
+                        state.pageIndex = savedPage;
+                        setStatus(state.authUser ? "Reader ready. Progress sync is on." : "Reader ready. Login to save progress.", false);
+                        renderReader();
+                    });
+                }
             }
         );
     }
@@ -1219,7 +1280,7 @@
         html += '<button id="readerPanelToggle" class="reader-panel-toggle" type="button">Controls v</button>';
         html += '<div id="readerPanelBody" class="reader-panel-body">';
         html += '<div class="reader-nav-row reader-panel-row">';
-        html += '<button id="readerClose" class="btn reader-big reader-chapters-btn" type="button">Chapters</button>';
+        html += '<button id="readerClose" class="btn reader-big reader-chapters-btn" type="button">To title</button>';
         html += '</div>';
         html += '<div class="reader-chapter-nav reader-panel-row">';
         html += '<button id="prevChapter" class="btn reader-chapter-btn" type="button">Prev Chapter</button>';
@@ -1251,6 +1312,7 @@
         showHtml(html);
         el("readerPanelToggle").onclick = toggleReaderPanel;
         el("readerClose").onclick = function () {
+            forceSavePageProgress();
             renderMangaDetail(state.currentManga, false);
         };
         el("prevPageSide").onclick = prevPage;
@@ -1318,7 +1380,7 @@
         if (rail && frame) {
             railWidth = 58;
             remainingHeight = Math.max(180, viewportHeight() - shellHeight);
-            translateHeight = 62;
+            translateHeight = Math.max(110, Math.min(165, Math.floor(remainingHeight * 0.30)));
             rail.style.position = "fixed";
             rail.style.left = "0px";
             rail.style.top = shellHeight + "px";
@@ -1682,21 +1744,29 @@
     }
 
     function preloadNearbyImages() {
-        var list = [], count = currentPageCount(), offset, index, image, url;
-        state.preloadImages = [];
-        for (offset = -state.preloadBeforeCount; offset <= state.preloadAfterCount; offset += 1) {
-            if (offset === 0) continue;
-            index = state.pageIndex + offset;
-            if (index < 0 || index >= count) continue;
+        var cache = state.preloadImages || {};
+        var wanted = {};
+        var count = currentPageCount();
+        var startIndex = Math.max(0, state.pageIndex - state.preloadBeforeCount);
+        var endIndex = Math.min(count - 1, state.pageIndex + state.preloadAfterCount);
+        var key, index, image, url;
+
+        // Keep a real sliding five-page window. Existing Image objects stay
+        // alive, so moving 10 -> 11 keeps 9/10/11/12 and only creates 13.
+        for (index = startIndex; index <= endIndex; index += 1) wanted[String(index)] = true;
+        for (key in cache) {
+            if (cache.hasOwnProperty(key) && !wanted[key]) delete cache[key];
+        }
+        for (index = startIndex; index <= endIndex; index += 1) {
+            key = String(index);
+            if (cache[key]) continue;
             url = currentPageUrl(index);
             if (!url) continue;
             image = new Image();
             image.src = url;
-            list.push(image);
+            cache[key] = image;
         }
-        // Together with #pageImage (the current page), these four retained
-        // Image objects form a five-page reading window: -2, -1, 0, +1, +2.
-        state.preloadImages = list;
+        state.preloadImages = cache;
     }
 
     function toggleQuality() {
@@ -1704,6 +1774,7 @@
         if (state.quality === "original" && !state.pagesOriginal.length)
             state.quality = "saver";
         saveReaderSettings();
+        state.preloadImages = {};
         showPage();
     }
 
@@ -1724,7 +1795,6 @@
         clearTranslationOverlay();
         requestCurrentTranslation();
         prefetchNextTranslation();
-        preloadNearbyImages();
 
         // Do not reset width/height to auto here. On the Voyage that causes a
         // visible 100% -> saved zoom jump while the next page is loading.
@@ -1734,7 +1804,10 @@
         applyReaderFit();
         img.removeAttribute("src");
         img.src = url;
-        savePageProgress();
+        // Start the visible page first. The retained five-page window then
+        // slides in the background and normally adds only one new image.
+        preloadNearbyImages();
+        schedulePageProgressSave();
         updateReaderControls();
         updateReaderPanel();
         window.scrollTo(0, 0);
@@ -1746,9 +1819,9 @@
             state.pageIndex += 1;
             showPage();
         } else {
-            setStatus("End of chapter.", false);
-            var bottom = el("readerBottomMessage");
-            if (bottom) bottom.innerHTML = "End of chapter";
+            forceSavePageProgress();
+            setReaderMessage("End of chapter. Opening next chapter...");
+            openRelativeChapter(-1, true);
         }
     }
 
@@ -1757,6 +1830,31 @@
             state.pageIndex -= 1;
             showPage();
         }
+    }
+
+    function loadReadMarkersForVisibleChapters() {
+        var ids = [], i, ch, mangaId;
+        if (!state.authUser || !state.currentMangaSaved || !state.currentManga) {
+            state.readChapterIds = {};
+            return;
+        }
+        mangaId = state.currentManga.id;
+        for (i = 0; i < state.chapters.length; i += 1) {
+            ch = state.chapters[i];
+            if (ch && ch.id) ids.push(ch.id);
+        }
+        if (!ids.length) {
+            state.readChapterIds = {};
+            return;
+        }
+        xhrPost("/api/reading/read-chapters", { mangaId: mangaId, chapterIds: ids }, function (err, json) {
+            var map = {}, list, j;
+            if (err || !json || state.currentManga.id !== mangaId) return;
+            list = json.chapterIds || [];
+            for (j = 0; j < list.length; j += 1) map[list[j]] = true;
+            state.readChapterIds = map;
+            renderMangaDetail(state.currentManga, false);
+        });
     }
 
     function checkCurrentMangaSaved(manga) {
@@ -1772,7 +1870,9 @@
             if (!err && json) {
                 state.currentMangaSaved = !!json.saved;
                 state.currentMangaSavedKnown = true;
+                state.readChapterIds = {};
                 renderMangaDetail(manga, state.chapterLoading);
+                if (state.currentMangaSaved && !state.chapterLoading) loadReadMarkersForVisibleChapters();
             }
         });
     }
@@ -1791,6 +1891,7 @@
                 }
                 state.currentMangaSaved = false;
                 state.currentMangaSavedKnown = true;
+                state.readChapterIds = {};
                 renderMangaDetail(manga, false);
                 setStatus("Removed from Saved Manga.", false);
             });
@@ -1802,8 +1903,10 @@
                 }
                 state.currentMangaSaved = true;
                 state.currentMangaSavedKnown = true;
+                state.readChapterIds = {};
                 renderMangaDetail(manga, false);
-                setStatus("Saved on server.", false);
+                loadReadMarkersForVisibleChapters();
+                setStatus("Saved on server. Read chapters will be marked (READ).", false);
             });
         }
     }
@@ -1968,6 +2071,7 @@
         loadReaderSettings();
         el("searchBtn").onclick = doSearch;
         el("homeBtn").onclick = loadHome;
+        el("randomBtn").onclick = loadRandomManga;
         el("savedBtn").onclick = function () { showSaved(1); };
         el("historyBtn").onclick = function () { showHistory(1); };
         el("accountBtn").onclick = showAccount;
@@ -1977,7 +2081,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v20 started. Neon account sync + 40-row server history. Testing API...", false);
+        setStatus("ES5 v21 started. Sliding page window + durable progress + Random. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
