@@ -188,3 +188,7 @@ The Kindle ES5 UI now has a **Books** section for `.epub` and `.azw3` files stor
 - Supported text-reader settings: font size, Serif/Sans/Mono, left/right margin, line spacing.
 
 See `GOOGLE_DRIVE_BOOKS_SETUP.md` for service-account and folder-sharing setup.
+
+## v25 user-controlled ebook pagination
+
+The Kindle text-book reader now paginates by a user-selected number of line-heights per page. The `Aa` panel includes `Lines - / Lines +` (5-40 lines/page). Left/right book margin changes in 10 px steps (`0, 10, ... 80`). Font size, line spacing, typeface and margin still trigger repagination while preserving the approximate reading position. Images remain inline and consume vertical page space, so image-heavy pages can naturally contain fewer text lines.
