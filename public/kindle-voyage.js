@@ -2389,7 +2389,7 @@
         if (!state.bookSettingsOpen) return "";
         return '<div class="book-settings">' +
             '<div class="book-setting-row"><button id="bookFontMinus" class="btn book-setting-button" type="button">A-</button><span class="book-setting-label">Font ' + state.bookFontSize + 'px</span><button id="bookFontPlus" class="btn book-setting-button" type="button">A+</button></div>' +
-            '<div class="book-setting-row"><button id="bookLinesMinus" class="btn book-setting-button" type="button">Lines -</button><span id="bookLinesLabel" class="book-setting-label">' + state.bookLinesPerPage + ' lines/page</span><button id="bookLinesPlus" class="btn book-setting-button" type="button">Lines +</button></div>' +
+            '<div class="book-setting-row book-lines-row"><button id="bookLinesMinus5" class="btn book-line-step" type="button">-5</button><button id="bookLinesMinus1" class="btn book-line-step" type="button">-1</button><span id="bookLinesLabel" class="book-setting-label book-lines-label">' + state.bookLinesPerPage + ' lines/page</span><button id="bookLinesPlus1" class="btn book-line-step" type="button">+1</button><button id="bookLinesPlus5" class="btn book-line-step" type="button">+5</button></div>' +
             '<div class="book-setting-row"><button id="bookMarginMinus" class="btn book-setting-button" type="button">Margin -</button><span class="book-setting-label">' + state.bookMargin + 'px</span><button id="bookMarginPlus" class="btn book-setting-button" type="button">Margin +</button></div>' +
             '<div class="book-setting-row"><button id="bookLineMinus" class="btn book-setting-button" type="button">Spacing -</button><span class="book-setting-label">' + (state.bookLineHeight / 100).toFixed(2) + '</span><button id="bookLinePlus" class="btn book-setting-button" type="button">Spacing +</button></div>' +
             '<div class="book-setting-row book-typeface-row"><span class="book-setting-side"></span><button id="bookFontType" class="btn book-setting-type" type="button">Typeface: ' + fontLabel + '</button><span class="book-setting-side"></span></div></div>';
@@ -2406,6 +2406,7 @@
             '<button id="bookNext" class="btn book-reader-btn" type="button">Next</button>' +
             '<button id="bookAa" class="btn book-reader-btn" type="button">Aa</button>' +
             '</div>' + bookSettingsHtml() + '</div><div id="bookControlSpacer" class="book-control-spacer"></div>' +
+            '<div id="bookSideRail" class="book-side-rail"><button id="bookPrevSide" class="book-side-prev" type="button"><span>PREV<br>PAGE</span></button></div>' +
             '<div id="bookPageViewport" class="book-page-viewport"><div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div></div>';
         document.body.className = "book-reader-active";
         el("view").innerHTML = html;
@@ -2528,22 +2529,34 @@
     }
 
     function layoutBookPages(restoreRatio) {
-        var shell = el("bookControlShell"), spacer = el("bookControlSpacer"), viewport = el("bookPageViewport"), flow = el("bookText");
-        var doc = document.documentElement, rows, toolbarHeight, viewportWidth, viewportHeight, margin, contentWidth, gap;
+        var shell = el("bookControlShell"), spacer = el("bookControlSpacer"), viewport = el("bookPageViewport"), flow = el("bookText"), rail = el("bookSideRail"), prevSide = el("bookPrevSide");
+        var doc = document.documentElement, rows, toolbarHeight, screenWidth, viewportWidth, viewportHeight, railWidth, margin, contentWidth, gap;
         var linePx, maxLines, pageLines, pageHeight, scrollWidth, count, images, i;
         if (!shell || !spacer || !viewport || !flow) return;
 
         /*
-         * v25 pagination: the reader chooses how many text line-heights make one page.
+         * v26 pagination: the reader chooses how many text line-heights make one page.
          * The fixed Aa settings panel is ignored when measuring the reading area so
          * opening settings does not silently change page breaks. Images/headings
          * consume vertical space inside the same page, just like a physical page.
          */
         rows = shell.getElementsByClassName ? shell.getElementsByClassName("book-reader-row") : null;
         toolbarHeight = rows && rows.length ? (rows[0].offsetHeight || 48) + 8 : 58;
-        viewportWidth = window.innerWidth || doc.clientWidth || 600;
+        screenWidth = window.innerWidth || doc.clientWidth || 600;
+        railWidth = 58;
+        viewportWidth = Math.max(140, screenWidth - railWidth);
         viewportHeight = (window.innerHeight || doc.clientHeight || 800) - toolbarHeight;
         if (viewportHeight < 180) viewportHeight = 180;
+
+        if (rail) {
+            rail.style.position = "fixed";
+            rail.style.left = "0px";
+            rail.style.top = toolbarHeight + "px";
+            rail.style.width = railWidth + "px";
+            rail.style.height = viewportHeight + "px";
+            rail.style.zIndex = "998";
+        }
+        if (prevSide) prevSide.style.height = viewportHeight + "px";
 
         margin = Math.max(0, Math.min(state.bookMargin, Math.floor((viewportWidth - 120) / 2)));
         contentWidth = Math.max(120, viewportWidth - (margin * 2));
@@ -2560,6 +2573,7 @@
         if (pageHeight > viewportHeight) pageHeight = viewportHeight;
 
         spacer.style.height = toolbarHeight + "px";
+        viewport.style.marginLeft = railWidth + "px";
         viewport.style.width = viewportWidth + "px";
         viewport.style.height = viewportHeight + "px";
         flow.style.position = "relative";
@@ -2588,10 +2602,12 @@
     }
 
     function updateBookPageControls() {
-        var label = el("bookPageCount"), prev = el("bookPrev"), next = el("bookNext");
+        var label = el("bookPageCount"), prev = el("bookPrev"), prevSide = el("bookPrevSide"), next = el("bookNext");
         var sectionCount = state.currentBook ? parseInt(state.currentBook.sectionCount, 10) || 1 : 1;
+        var atStart = state.bookSectionIndex <= 0 && state.bookPageIndex <= 0;
         if (label) label.innerHTML = (state.bookPageIndex + 1) + "/" + state.bookPageCount;
-        if (prev) prev.disabled = state.bookSectionIndex <= 0 && state.bookPageIndex <= 0;
+        if (prev) prev.disabled = atStart;
+        if (prevSide) prevSide.disabled = atStart;
         if (next) next.disabled = state.bookSectionIndex >= sectionCount - 1 && state.bookPageIndex >= state.bookPageCount - 1;
     }
 
@@ -2652,15 +2668,22 @@
     }
 
     function bindBookReaderControls() {
+        var viewport = el("bookPageViewport");
         el("bookBack").onclick = function () { showBooks(state.booksPage || 1, ""); };
         el("bookPrev").onclick = previousBookPage;
+        el("bookPrevSide").onclick = previousBookPage;
         el("bookNext").onclick = nextBookPage;
         el("bookAa").onclick = function () { state.bookSettingsOpen = !state.bookSettingsOpen; rerenderBookControlsKeepPosition(); };
+        if (viewport) {
+            viewport.onclick = function () { nextBookPage(); };
+        }
         if (state.bookSettingsOpen) {
             el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
             el("bookFontPlus").onclick = function () { changeBookSetting("font", 2); };
-            el("bookLinesMinus").onclick = function () { changeBookSetting("lines", -1); };
-            el("bookLinesPlus").onclick = function () { changeBookSetting("lines", 1); };
+            el("bookLinesMinus5").onclick = function () { changeBookSetting("lines", -5); };
+            el("bookLinesMinus1").onclick = function () { changeBookSetting("lines", -1); };
+            el("bookLinesPlus1").onclick = function () { changeBookSetting("lines", 1); };
+            el("bookLinesPlus5").onclick = function () { changeBookSetting("lines", 5); };
             el("bookMarginMinus").onclick = function () { changeBookSetting("margin", -10); };
             el("bookMarginPlus").onclick = function () { changeBookSetting("margin", 10); };
             el("bookLineMinus").onclick = function () { changeBookSetting("line", -10); };
@@ -2722,7 +2745,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v25 started. user-selected lines/page EPUB/AZW3 reader + inline images + manga reader. Testing API...", false);
+        setStatus("ES5 v26 started. tap-to-next ebook + side back rail + fast line steps + manga reader. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
