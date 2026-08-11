@@ -69,7 +69,7 @@ The project uses server-side parsers for EPUB and Kindle KF8/AZW3. Ebook HTML is
 Restart/deploy the app and open:
 
 ```text
-/kindle?t=23
+/kindle?t=231
 ```
 
 Tap **Books** in the top navigation.
@@ -94,3 +94,16 @@ Growing data stays off the Kindle:
 - manga history/progress/saved manga: Neon
 
 The service-account credentials and Google Drive access token are server-only.
+
+## Render / Node ESM note (v23.1)
+
+The ebook parser packages publish separate Node ESM and CommonJS entry points. The server is built as ESM (`dist/server.mjs`) so Node selects the working `import` entry point. The parser modules are also lazy-loaded only when an EPUB/AZW3 is opened, so a parser problem cannot crash the whole manga server during startup.
+
+If upgrading from v23, make sure Render uses the project scripts as-is:
+
+```text
+Build Command: npm install && npm run build
+Start Command: npm start
+```
+
+Do not override the Start Command with `node dist/server.cjs`; v23.1 starts `dist/server.mjs`.

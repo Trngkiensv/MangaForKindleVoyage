@@ -2531,7 +2531,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v23 started. Google Drive EPUB/AZW3 text reader + manga reader. Testing API...", false);
+        setStatus("ES5 v23.1 started. Google Drive EPUB/AZW3 text reader + manga reader. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

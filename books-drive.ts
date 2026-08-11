@@ -2,8 +2,6 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { initEpubFile } from '@lingo-reader/epub-parser';
-import { initKf8File } from '@lingo-reader/mobi-parser';
 
 export type DriveBookItem = {
   id: string;
@@ -44,6 +42,23 @@ const BOOK_MAX_FILE_MB = Math.max(5, Math.min(250, parseInt(String(process.env.B
 let tokenCache: DriveToken | null = null;
 let libraryCache: { expiresAt: number; items: DriveBookItem[] } | null = null;
 const parsedBookCache = new Map<string, BookCacheEntry>();
+
+let epubParserModulePromise: Promise<any> | null = null;
+let mobiParserModulePromise: Promise<any> | null = null;
+
+async function getEpubParserModule() {
+  if (!epubParserModulePromise) {
+    epubParserModulePromise = import('@lingo-reader/epub-parser');
+  }
+  return epubParserModulePromise;
+}
+
+async function getMobiParserModule() {
+  if (!mobiParserModulePromise) {
+    mobiParserModulePromise = import('@lingo-reader/mobi-parser');
+  }
+  return mobiParserModulePromise;
+}
 
 function serviceAccountCredentials() {
   const raw = String(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
@@ -296,6 +311,9 @@ function flattenKf8Toc(kf8: any) {
 }
 
 async function parseEpub(item: DriveBookItem, bytes: Uint8Array): Promise<ParsedBook> {
+  const parserModule = await getEpubParserModule();
+  const initEpubFile = parserModule.initEpubFile;
+  if (typeof initEpubFile !== 'function') throw new Error('EPUB parser failed to load');
   const resourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kindle-epub-'));
   let epub: any = null;
   try {
@@ -336,6 +354,9 @@ async function parseEpub(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
 }
 
 async function parseAzw3(item: DriveBookItem, bytes: Uint8Array): Promise<ParsedBook> {
+  const parserModule = await getMobiParserModule();
+  const initKf8File = parserModule.initKf8File;
+  if (typeof initKf8File !== 'function') throw new Error('AZW3 parser failed to load');
   const resourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kindle-azw3-'));
   let kf8: any = null;
   try {
