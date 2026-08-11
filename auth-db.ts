@@ -542,6 +542,29 @@ export async function getSavedManga(userId: number, pageRaw: unknown, limitRaw: 
   return { items: result.rows, total, page, pages, limit };
 }
 
+export async function getSavedMangaIds(userId: number, provider: string, mangaIdsRaw: unknown) {
+  const db = await ensureReady();
+  const raw = Array.isArray(mangaIdsRaw) ? mangaIdsRaw : [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const value of raw) {
+    const id = String(value || '').slice(0, 1000);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= 40) break;
+  }
+  if (!ids.length) return [];
+  const result = await db.query(
+    `SELECT manga_id
+       FROM saved_manga
+      WHERE user_id = $1 AND provider = $2
+        AND manga_id = ANY($3::text[])`,
+    [userId, provider, ids],
+  );
+  return result.rows.map((row: any) => String(row.manga_id));
+}
+
 export async function isMangaSaved(userId: number, provider: string, mangaId: string) {
   const db = await ensureReady();
   const result = await db.query(

@@ -51,6 +51,8 @@
         historyPages: 1,
         savedPage: 1,
         savedPages: 1,
+        savedMangaIds: {},
+        savedMangaKnown: {},
         loading: false
     };
 
@@ -251,6 +253,8 @@
         state.currentMangaSaved = false;
         state.currentMangaSavedKnown = false;
         state.readChapterIds = {};
+        state.savedMangaIds = {};
+        state.savedMangaKnown = {};
         refreshAccountButton();
     }
 
@@ -478,7 +482,7 @@
                 rel.attributes
             ) {
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";
-                if (direct) return "/api/image-proxy?url=" + encodeURIComponent(direct);
+                if (direct) return "/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct);
                 fileName = rel.attributes.fileName;
                 if (!fileName) return "";
                 direct =
@@ -487,7 +491,7 @@
                     "/" +
                     fileName +
                     ".256.jpg";
-                return "/api/image-proxy?url=" + encodeURIComponent(direct);
+                return "/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct);
             }
         }
         return "";
@@ -508,7 +512,7 @@
     function renderMangaList(items, heading) {
         leaveReaderMode();
         var html = '<div class="heading">' + escapeHtml(heading) + "</div>";
-        var i, m, cover, desc, title;
+        var i, m, cover, desc, title, known, saved;
         if (!items || !items.length) {
             showHtml(html + '<div class="notice">No manga found.</div>');
             return;
@@ -518,6 +522,8 @@
             title = getTitle(m);
             cover = getCover(m);
             desc = getDescription(m);
+            known = !!state.savedMangaKnown[m.id];
+            saved = !!state.savedMangaIds[m.id];
             if (desc.length > 180) desc = desc.substring(0, 180) + "...";
             html += '<div class="manga-item">';
             html += '<div class="cover-wrap">';
@@ -525,7 +531,7 @@
                 html +=
                     '<img class="cover" src="' +
                     escapeHtml(cover) +
-                    '" alt="cover">';
+                    '" alt="Cover">';
             html += "</div>";
             html += '<div class="manga-info">';
             html += '<div class="manga-title">' + escapeHtml(title) + "</div>";
@@ -534,10 +540,102 @@
                 '<button type="button" class="btn btn-dark open-manga" data-index="' +
                 i +
                 '">Open</button>';
+            if (state.authUser) {
+                html += '<button type="button" class="btn save-manga-card" data-index="' + i + '"' +
+                    (known ? '' : ' disabled="disabled"') + '>' +
+                    (known ? (saved ? 'Remove Saved' : 'Save') : 'Checking...') + '</button>';
+            }
             html += '</div><div class="clear"></div></div>';
         }
         showHtml(html);
         bindMangaButtons(items);
+        if (state.authUser) loadSavedStatesForMangaList(items);
+    }
+
+    function updateMangaListSaveButtons(items) {
+        var buttons = document.getElementsByTagName("button");
+        var i, b, idx, manga, known, saved;
+        for (i = 0; i < buttons.length; i += 1) {
+            b = buttons[i];
+            if ((" " + b.className + " ").indexOf(" save-manga-card ") === -1) continue;
+            idx = parseInt(b.getAttribute("data-index"), 10);
+            manga = items[idx];
+            if (!manga || !manga.id) continue;
+            known = !!state.savedMangaKnown[manga.id];
+            saved = !!state.savedMangaIds[manga.id];
+            b.disabled = !known;
+            b.innerHTML = known ? (saved ? "Remove Saved" : "Save") : "Checking...";
+        }
+    }
+
+    function loadSavedStatesForMangaList(items) {
+        var ids = [];
+        var i, manga;
+        if (!state.authUser || !items || !items.length) return;
+        for (i = 0; i < items.length && ids.length < 40; i += 1) {
+            manga = items[i];
+            if (manga && manga.id && !state.savedMangaKnown[manga.id]) ids.push(manga.id);
+        }
+        if (!ids.length) {
+            updateMangaListSaveButtons(items);
+            return;
+        }
+        xhrPost("/api/reading/saved/check-many", { mangaIds: ids }, function (err, json) {
+            var savedIds, j;
+            if (err || !json) {
+                setStatus(err || "Could not sync Saved state.", true);
+                updateMangaListSaveButtons(items);
+                return;
+            }
+            for (j = 0; j < ids.length; j += 1) {
+                state.savedMangaKnown[ids[j]] = true;
+                state.savedMangaIds[ids[j]] = false;
+            }
+            savedIds = json.savedIds || [];
+            for (j = 0; j < savedIds.length; j += 1) {
+                state.savedMangaKnown[savedIds[j]] = true;
+                state.savedMangaIds[savedIds[j]] = true;
+            }
+            updateMangaListSaveButtons(items);
+        });
+    }
+
+    function toggleSavedFromMangaList(manga, items) {
+        var isSaved;
+        if (!state.authUser || !manga || !manga.id || !state.savedMangaKnown[manga.id]) return;
+        isSaved = !!state.savedMangaIds[manga.id];
+        setStatus(isSaved ? "Removing saved manga..." : "Saving manga...", false);
+        if (isSaved) {
+            xhrDelete("/api/reading/saved/" + encodeURIComponent(manga.id), function (err) {
+                if (err) {
+                    setStatus(err, true);
+                    return;
+                }
+                state.savedMangaIds[manga.id] = false;
+                state.savedMangaKnown[manga.id] = true;
+                if (state.currentManga && state.currentManga.id === manga.id) {
+                    state.currentMangaSaved = false;
+                    state.currentMangaSavedKnown = true;
+                }
+                updateMangaListSaveButtons(items);
+                setStatus("Removed from Saved Manga.", false);
+            });
+        } else {
+            xhrPost("/api/reading/saved", { mangaId: manga.id, mangaTitle: getTitle(manga) }, function (err) {
+                if (err) {
+                    setStatus(err, true);
+                    return;
+                }
+                state.savedMangaIds[manga.id] = true;
+                state.savedMangaKnown[manga.id] = true;
+                if (state.currentManga && state.currentManga.id === manga.id) {
+                    state.currentMangaSaved = true;
+                    state.currentMangaSavedKnown = true;
+                }
+                updateMangaListSaveButtons(items);
+                setStatus("Saved on server.", false);
+            });
+        }
     }
 
     function bindMangaButtons(items) {
@@ -548,6 +646,11 @@
             if ((" " + b.className + " ").indexOf(" open-manga ") !== -1) {
                 idx = parseInt(b.getAttribute("data-index"), 10);
                 b.onclick = makeOpenHandler(items[idx]);
+            } else if ((" " + b.className + " ").indexOf(" save-manga-card ") !== -1) {
+                idx = parseInt(b.getAttribute("data-index"), 10);
+                b.onclick = (function (manga) {
+                    return function () { toggleSavedFromMangaList(manga, items); };
+                }(items[idx]));
             }
         }
     }
@@ -667,8 +770,8 @@
         state.chapterOffset = 0;
         state.chapterTotal = 0;
         state.chapterLoading = false;
-        state.currentMangaSaved = false;
-        state.currentMangaSavedKnown = false;
+        state.currentMangaSaved = !!state.savedMangaIds[manga.id];
+        state.currentMangaSavedKnown = !!state.savedMangaKnown[manga.id];
         state.readChapterIds = {};
         renderMangaDetail(manga, true);
         loadChapters(manga.id, 0);
@@ -724,7 +827,7 @@
         html += '<div class="description">' + escapeHtml(desc) + "</div>";
         html +=
             '<button id="bookmarkCurrent" type="button" class="btn btn-dark">' +
-            (!state.authUser ? "Login to save" : (saved ? "Remove saved" : "Save manga")) +
+            (!state.authUser ? "Login to save" : (saved ? "Remove Saved" : "Save Manga")) +
             "</button>";
         html +=
             '<button id="backHome" type="button" class="btn">Back home</button>';
@@ -1312,8 +1415,9 @@
         showHtml(html);
         el("readerPanelToggle").onclick = toggleReaderPanel;
         el("readerClose").onclick = function () {
+            var manga = state.currentManga;
             forceSavePageProgress();
-            renderMangaDetail(state.currentManga, false);
+            if (manga) openManga(manga);
         };
         el("prevPageSide").onclick = prevPage;
         el("prevChapter").onclick = function () { openRelativeChapter(1); };
@@ -1870,6 +1974,8 @@
             if (!err && json) {
                 state.currentMangaSaved = !!json.saved;
                 state.currentMangaSavedKnown = true;
+                state.savedMangaIds[manga.id] = !!json.saved;
+                state.savedMangaKnown[manga.id] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, state.chapterLoading);
                 if (state.currentMangaSaved && !state.chapterLoading) loadReadMarkersForVisibleChapters();
@@ -1891,6 +1997,8 @@
                 }
                 state.currentMangaSaved = false;
                 state.currentMangaSavedKnown = true;
+                state.savedMangaIds[manga.id] = false;
+                state.savedMangaKnown[manga.id] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, false);
                 setStatus("Removed from Saved Manga.", false);
@@ -1903,6 +2011,8 @@
                 }
                 state.currentMangaSaved = true;
                 state.currentMangaSavedKnown = true;
+                state.savedMangaIds[manga.id] = true;
+                state.savedMangaKnown[manga.id] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, false);
                 loadReadMarkersForVisibleChapters();
@@ -1944,6 +2054,8 @@
             html += renderDataPager("savedPager", state.savedPage, state.savedPages);
             if (!list.length) html += '<div class="notice">No saved manga yet.</div>';
             for (i = 0; i < list.length; i += 1) {
+                state.savedMangaIds[list[i].manga_id] = true;
+                state.savedMangaKnown[list[i].manga_id] = true;
                 html += '<button type="button" class="chapter saved-open" data-id="' +
                     escapeHtml(list[i].manga_id) + '"><span class="chapter-main">' +
                     escapeHtml(list[i].manga_title || list[i].manga_id) + '</span></button>';
@@ -2081,7 +2193,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v21 started. Sliding page window + durable progress + Random. Testing API...", false);
+        setStatus("ES5 v22 started. Kindle JPEG covers + paged title + synced Saved state. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

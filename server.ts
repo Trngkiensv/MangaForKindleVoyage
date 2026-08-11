@@ -1,6 +1,7 @@
 import express from 'express';
 import os from 'os';
 import path from 'path';
+import sharp from 'sharp';
 import { getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
@@ -11,6 +12,7 @@ import {
   getProgress,
   getReadChapterIds,
   getSavedManga,
+  getSavedMangaIds,
   getUserBySessionToken,
   initAuthDatabase,
   isMangaSaved,
@@ -320,6 +322,20 @@ app.get('/api/reading/saved', async (req, res) => {
   }
 });
 
+app.post('/api/reading/saved/check-many', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    const savedIds = await getSavedMangaIds(user.id, provider.key, req.body?.mangaIds);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ savedIds });
+  } catch (error: any) {
+    console.error('Saved manga batch check error:', error);
+    return res.status(500).json({ error: 'Could not check saved manga' });
+  }
+});
+
 app.get('/api/reading/saved/check/:mangaId', async (req, res) => {
   try {
     const user = await requireUser(req, res);
@@ -609,11 +625,32 @@ app.get('/api/image-proxy', async (req, res) => {
     }
 
     const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const arrayBuffer = await response.arrayBuffer();
+    const sourceBuffer = Buffer.from(arrayBuffer);
+    const kindleCover = String(req.query.kindle || '').toLowerCase() === 'cover';
+
+    if (kindleCover) {
+      try {
+        // Voyage WebKit does not reliably decode modern cover formats such as
+        // WebP/AVIF. Normalize only cover thumbnails to a small baseline JPEG.
+        // Chapter pages stay byte-for-byte unchanged through the proxy.
+        const jpegCover = await sharp(sourceBuffer, { failOn: 'none' })
+          .rotate()
+          .resize({ width: 320, withoutEnlargement: true })
+          .jpeg({ quality: 78, progressive: false, chromaSubsampling: '4:2:0' })
+          .toBuffer();
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(jpegCover);
+      } catch (coverError) {
+        console.error('Kindle cover conversion error:', coverError);
+        // Fall through to the original bytes instead of breaking the card.
+      }
+    }
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
-
-    const arrayBuffer = await response.arrayBuffer();
-    return res.send(Buffer.from(arrayBuffer));
+    return res.send(sourceBuffer);
   } catch (error: any) {
     console.error('Image Proxy Error:', error);
     return res.status(500).send('Error proxying image');

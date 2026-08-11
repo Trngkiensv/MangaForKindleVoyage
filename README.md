@@ -156,7 +156,7 @@ the Kindle. The five-page translation hot cache and image preload window remain 
 See `NEON_ACCOUNT_SETUP.md` and `.env.example` for Render/Neon/email configuration.
 
 
-## v21 reader behavior
+## v22 reader behavior
 
 - Five-page image window is retained as a sliding cache: after the initial window, moving one page normally creates only one new image preload.
 - Reading progress is debounced while paging and force-saved when leaving the reader or changing chapters.
@@ -164,3 +164,10 @@ See `NEON_ACCOUNT_SETUP.md` and `.env.example` for Render/Neon/email configurati
 - Reader button is labeled **To title**.
 - Saved manga chapter pages mark chapters already present in server reading progress with **(READ)**.
 - **Random** samples and displays up to 10 manga per press.
+
+
+### v22 fixes
+
+- Kindle cover thumbnails are normalized to baseline JPEG through the server proxy for old Voyage WebKit compatibility.
+- **To title** always re-enters the normal 40-release chapter pager, including after direct resume from History.
+- Saved state is batch-synced from Neon on Search/Random lists. Cards show **Save** or **Remove Saved** consistently with the title page.
