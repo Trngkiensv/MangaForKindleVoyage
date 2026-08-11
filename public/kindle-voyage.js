@@ -2424,13 +2424,89 @@
         setStatus("Reading " + (book.title || "book") + " - section " + (index + 1) + "/" + (parseInt(book.sectionCount, 10) || 1) + ".", false);
     }
 
+    function ensureBookImagePage(image) {
+        var parent, tag, wrapper;
+        if (!image || !image.parentNode) return image;
+        parent = image.parentNode;
+        tag = parent.tagName ? String(parent.tagName).toLowerCase() : "";
+        if ((" " + (parent.className || "") + " ").indexOf(" book-image-page ") >= 0) return parent;
+        if (tag === "figure") {
+            parent.className = (parent.className ? parent.className + " " : "") + "book-image-page";
+            return parent;
+        }
+        wrapper = document.createElement("span");
+        wrapper.className = "book-image-page";
+        parent.insertBefore(wrapper, image);
+        wrapper.appendChild(image);
+        return wrapper;
+    }
+
+    function fitBookImage(image, contentWidth, pageHeight) {
+        var box, naturalWidth, naturalHeight, maxWidth, maxHeight, scale, width, height, extraHeight;
+        if (!image || image.style.display === "none") return;
+        box = ensureBookImagePage(image);
+        maxWidth = Math.max(80, Math.floor(contentWidth - 4));
+        maxHeight = Math.max(60, Math.floor(pageHeight - 22));
+        naturalWidth = image.naturalWidth || parseInt(image.getAttribute("width"), 10) || 0;
+        naturalHeight = image.naturalHeight || parseInt(image.getAttribute("height"), 10) || 0;
+
+        if (box && box !== image) {
+            box.style.display = "block";
+            box.style.width = "100%";
+            box.style.maxWidth = contentWidth + "px";
+            box.style.marginLeft = "0px";
+            box.style.marginRight = "0px";
+            box.style.webkitColumnBreakBefore = "always";
+            box.style.webkitColumnBreakInside = "avoid";
+            box.style.pageBreakInside = "avoid";
+        }
+
+        /*
+         * Old Kindle WebKit can ignore max-height for replaced elements while
+         * laying them out in CSS columns. Give loaded images an explicit pixel
+         * size so a tall image can never extend below the page box and be clipped.
+         */
+        if (naturalWidth > 0 && naturalHeight > 0) {
+            extraHeight = 0;
+            if (box && box !== image && box.tagName && String(box.tagName).toLowerCase() === "figure") {
+                extraHeight = Math.max(0, (box.offsetHeight || 0) - (image.offsetHeight || 0));
+                if (extraHeight > 0) maxHeight = Math.max(60, maxHeight - extraHeight);
+            }
+            scale = Math.min(1, maxWidth / naturalWidth, maxHeight / naturalHeight);
+            width = Math.max(1, Math.floor(naturalWidth * scale));
+            height = Math.max(1, Math.floor(naturalHeight * scale));
+            image.style.width = width + "px";
+            image.style.height = height + "px";
+            image.style.maxWidth = "none";
+            image.style.maxHeight = "none";
+        } else {
+            image.style.width = "auto";
+            image.style.height = "auto";
+            image.style.maxWidth = maxWidth + "px";
+            image.style.maxHeight = maxHeight + "px";
+        }
+        image.style.display = "block";
+        image.style.webkitColumnBreakInside = "avoid";
+        image.style.pageBreakInside = "avoid";
+        image.style.marginLeft = "auto";
+        image.style.marginRight = "auto";
+    }
+
     function bindBookImages() {
-        var root = el("bookText"), images, i;
+        var root = el("bookText"), images, list, i;
         if (!root || !root.getElementsByTagName) return;
         images = root.getElementsByTagName("img");
-        for (i = 0; i < images.length; i += 1) {
-            images[i].onload = function () { scheduleBookLayout(); };
-            images[i].onerror = function () { this.style.display = "none"; scheduleBookLayout(); };
+        list = [];
+        for (i = 0; i < images.length; i += 1) list.push(images[i]);
+        for (i = 0; i < list.length; i += 1) {
+            ensureBookImagePage(list[i]);
+            list[i].onload = function () { scheduleBookLayout(); };
+            list[i].onerror = function () {
+                var box = this.parentNode;
+                this.style.display = "none";
+                if (box && (" " + (box.className || "") + " ").indexOf(" book-image-page ") >= 0) box.style.display = "none";
+                scheduleBookLayout();
+            };
         }
     }
 
@@ -2503,12 +2579,7 @@
         applyBookTextStyle();
 
         images = flow.getElementsByTagName ? flow.getElementsByTagName("img") : [];
-        for (i = 0; i < images.length; i += 1) {
-            images[i].style.maxWidth = contentWidth + "px";
-            images[i].style.maxHeight = Math.max(80, Math.floor(pageHeight - 18)) + "px";
-            images[i].style.width = "auto";
-            images[i].style.height = "auto";
-        }
+        for (i = 0; i < images.length; i += 1) fitBookImage(images[i], contentWidth, pageHeight);
 
         scrollWidth = flow.scrollWidth || contentWidth;
         count = Math.max(1, Math.ceil((scrollWidth + margin) / viewportWidth));
