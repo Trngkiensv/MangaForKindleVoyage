@@ -4,8 +4,29 @@ import path from 'path';
 import { getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
+import {
+  authDatabaseConfigured,
+  cleanupExpiredAuthData,
+  getHistory,
+  getProgress,
+  getSavedManga,
+  getUserBySessionToken,
+  initAuthDatabase,
+  isMangaSaved,
+  loginUser,
+  logoutSession,
+  mailConfigured,
+  registerUser,
+  removeSavedManga,
+  requestPasswordReset,
+  resetPassword,
+  saveManga,
+  saveProgress,
+  type AuthUser,
+} from './auth-db';
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 3000);
 const isDevelopment = process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
 const translationService = new EnglishVietnameseTranslationService();
@@ -13,7 +34,7 @@ const translationService = new EnglishVietnameseTranslationService();
 const chapterPagesCache = new Map<string, { expiresAt: number; data: ProviderChapterPagesResponse }>();
 const CHAPTER_PAGES_CACHE_MS = 60 * 60 * 1000;
 
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
 function queryParamsFromExpress(query: express.Request['query']): URLSearchParams {
   const params = new URLSearchParams();
@@ -35,6 +56,89 @@ function providerForRequest(req: express.Request) {
   return getProvider(requested);
 }
 
+const SESSION_COOKIE = 'manga_session';
+const SESSION_DAYS = Math.max(1, Math.min(365, parseInt(String(process.env.AUTH_SESSION_DAYS || '90'), 10) || 90));
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function clientIp(req: express.Request) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function allowRate(key: string, limit: number, windowMs: number) {
+  const now = Date.now();
+  const current = rateBuckets.get(key);
+  if (!current || current.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= limit) return false;
+  current.count += 1;
+  return true;
+}
+
+function readCookie(req: express.Request, name: string) {
+  const raw = String(req.headers.cookie || '');
+  const parts = raw.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx < 0) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === name) {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch (_error) {
+        return part.slice(idx + 1).trim();
+      }
+    }
+  }
+  return '';
+}
+
+function setSessionCookie(res: express.Response, token: string) {
+  const maxAge = SESSION_DAYS * 24 * 60 * 60;
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    `Max-Age=${maxAge}`,
+    'SameSite=Lax',
+  ];
+  if (!isDevelopment && process.env.AUTH_COOKIE_SECURE !== 'false') parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearSessionCookie(res: express.Response) {
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'Max-Age=0',
+    'SameSite=Lax',
+  ];
+  if (!isDevelopment && process.env.AUTH_COOKIE_SECURE !== 'false') parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+async function sessionUser(req: express.Request): Promise<AuthUser | null> {
+  if (!authDatabaseConfigured()) return null;
+  const token = readCookie(req, SESSION_COOKIE);
+  if (!token) return null;
+  return getUserBySessionToken(token);
+}
+
+async function requireUser(req: express.Request, res: express.Response): Promise<AuthUser | null> {
+  if (!authDatabaseConfigured()) {
+    res.status(503).json({ error: 'Account database is not configured' });
+    return null;
+  }
+  const user = await sessionUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Please log in' });
+    return null;
+  }
+  return user;
+}
 
 async function getCachedChapterPages(
   provider: MangaProvider,
@@ -52,6 +156,197 @@ async function getCachedChapterPages(
   return data;
 }
 
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = await sessionUser(req);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      authenticated: !!user,
+      user,
+      databaseConfigured: authDatabaseConfigured(),
+      mailConfigured: mailConfigured(),
+      sessionDays: SESSION_DAYS,
+    });
+  } catch (error: any) {
+    console.error('Auth me error:', error);
+    res.status(500).json({ error: 'Could not read account session' });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    if (!authDatabaseConfigured()) return res.status(503).json({ error: 'Account database is not configured' });
+    if (!allowRate(`register:${clientIp(req)}`, 8, 60 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many registration attempts. Try again later.' });
+    }
+    const session = await registerUser(req.body?.username, req.body?.email, req.body?.password);
+    setSessionCookie(res, session.token);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(201).json({ ok: true, user: session.user });
+  } catch (error: any) {
+    return res.status(400).json({ error: error?.message || String(error) });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    if (!authDatabaseConfigured()) return res.status(503).json({ error: 'Account database is not configured' });
+    if (!allowRate(`login:${clientIp(req)}`, 30, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+    }
+    const session = await loginUser(req.body?.identifier, req.body?.password);
+    setSessionCookie(res, session.token);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, user: session.user });
+  } catch (error: any) {
+    return res.status(401).json({ error: error?.message || 'Login failed' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const token = readCookie(req, SESSION_COOKIE);
+    if (token) await logoutSession(token);
+    clearSessionCookie(res);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true });
+  } catch (error: any) {
+    console.error('Logout error:', error);
+    clearSessionCookie(res);
+    return res.json({ ok: true });
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    if (!authDatabaseConfigured()) return res.status(503).json({ error: 'Account database is not configured' });
+    if (!mailConfigured()) return res.status(503).json({ error: 'Password reset email is not configured on the server' });
+    if (!allowRate(`forgot:${clientIp(req)}`, 8, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many reset requests. Try again later.' });
+    }
+    try {
+      await requestPasswordReset(req.body?.identifier);
+    } catch (error) {
+      console.error('Password reset email error:', error);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, message: 'If the account exists, a 6-digit reset code was sent by email.' });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Could not process password reset request' });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    if (!authDatabaseConfigured()) return res.status(503).json({ error: 'Account database is not configured' });
+    if (!allowRate(`reset:${clientIp(req)}`, 20, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many reset attempts. Try again later.' });
+    }
+    const session = await resetPassword(req.body?.identifier, req.body?.code, req.body?.newPassword);
+    setSessionCookie(res, session.token);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, user: session.user });
+  } catch (error: any) {
+    return res.status(400).json({ error: error?.message || 'Password reset failed' });
+  }
+});
+
+app.get('/api/reading/progress/:chapterId', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    const item = await getProgress(user.id, provider.key, req.params.chapterId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ item });
+  } catch (error: any) {
+    console.error('Reading progress load error:', error);
+    return res.status(500).json({ error: 'Could not load reading progress' });
+  }
+});
+
+app.post('/api/reading/progress', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    await saveProgress(user.id, provider.key, req.body || {});
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true });
+  } catch (error: any) {
+    console.error('Reading progress save error:', error);
+    return res.status(400).json({ error: error?.message || 'Could not save reading progress' });
+  }
+});
+
+app.get('/api/reading/history', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const data = await getHistory(user.id, req.query.page, req.query.limit || 40);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(data);
+  } catch (error: any) {
+    console.error('Reading history error:', error);
+    return res.status(500).json({ error: 'Could not load reading history' });
+  }
+});
+
+app.get('/api/reading/saved', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const data = await getSavedManga(user.id, req.query.page, req.query.limit || 40);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(data);
+  } catch (error: any) {
+    console.error('Saved manga load error:', error);
+    return res.status(500).json({ error: 'Could not load saved manga' });
+  }
+});
+
+app.get('/api/reading/saved/check/:mangaId', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    const saved = await isMangaSaved(user.id, provider.key, req.params.mangaId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ saved });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Could not check saved manga' });
+  }
+});
+
+app.post('/api/reading/saved', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    const mangaId = String(req.body?.mangaId || '');
+    const mangaTitle = String(req.body?.mangaTitle || '');
+    if (!mangaId) return res.status(400).json({ error: 'mangaId is required' });
+    await saveManga(user.id, provider.key, mangaId, mangaTitle);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, saved: true });
+  } catch (error: any) {
+    return res.status(400).json({ error: error?.message || 'Could not save manga' });
+  }
+});
+
+app.delete('/api/reading/saved/:mangaId', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const provider = providerForRequest(req);
+    await removeSavedManga(user.id, provider.key, req.params.mangaId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, saved: false });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Could not remove saved manga' });
+  }
+});
+
 app.get('/api/health', (_req, res) => {
   const provider = getProvider();
   res.setHeader('Cache-Control', 'no-store');
@@ -60,6 +355,8 @@ app.get('/api/health', (_req, res) => {
     mode: isDevelopment ? 'development' : 'production',
     provider: provider.key,
     providers: listProviders(),
+    accountDatabase: authDatabaseConfigured(),
+    resetEmail: mailConfigured(),
   });
 });
 
@@ -293,6 +590,18 @@ function printLanUrls() {
 }
 
 async function startServer() {
+  if (authDatabaseConfigured()) {
+    try {
+      await initAuthDatabase();
+      await cleanupExpiredAuthData();
+      console.log('Account database: Neon/Postgres connected');
+    } catch (error) {
+      console.error('Account database initial connection failed; manga reading will still start and auth routes will retry:', error);
+    }
+  } else {
+    console.log('Account database: disabled (DATABASE_URL not set)');
+  }
+
   if (isDevelopment) {
     const publicPath = path.join(process.cwd(), 'public');
 

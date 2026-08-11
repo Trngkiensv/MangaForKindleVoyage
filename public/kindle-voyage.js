@@ -37,12 +37,24 @@
         preloadImages: [],
         preloadBeforeCount: 2,
         preloadAfterCount: 2,
+        authUser: null,
+        authChecked: false,
+        authDatabaseConfigured: false,
+        resetEmailConfigured: false,
+        currentMangaSaved: false,
+        currentMangaSavedKnown: false,
+        historyPage: 1,
+        historyPages: 1,
+        savedPage: 1,
+        savedPages: 1,
         loading: false
     };
 
-    var BOOKMARKS_KEY = "kindle_voyage_es5_bookmarks_v2";
-    var HISTORY_KEY = "kindle_voyage_es5_history_v3";
-    var PROGRESS_KEY = "kindle_voyage_es5_progress_v3";
+    // Only fixed-size reader preferences stay in Kindle localStorage.
+    // Growing data (history, progress, saved manga) lives in Neon via the server.
+    var LEGACY_BOOKMARKS_KEY = "kindle_voyage_es5_bookmarks_v2";
+    var LEGACY_HISTORY_KEY = "kindle_voyage_es5_history_v3";
+    var LEGACY_PROGRESS_KEY = "kindle_voyage_es5_progress_v3";
     var SETTINGS_KEY = "kindle_voyage_es5_reader_settings_v3";
 
     function el(id) {
@@ -122,6 +134,43 @@
         }
     }
 
+    function xhrJson(method, url, payload, done) {
+        var req;
+        try {
+            req = new XMLHttpRequest();
+            req.open(method, url, true);
+            req.setRequestHeader("Content-Type", "application/json");
+            req.onreadystatechange = function () {
+                if (req.readyState !== 4) return;
+                var data = null;
+                if (req.responseText) {
+                    try {
+                        data = JSON.parse(req.responseText);
+                    } catch (ignoreParse) {}
+                }
+                if (req.status >= 200 && req.status < 300) {
+                    done(null, data || {});
+                } else {
+                    var message = "HTTP " + req.status;
+                    if (data && data.error) message = data.error;
+                    done(message, data);
+                }
+            };
+            req.onerror = function () { done("Network request failed", null); };
+            req.send(payload === null || typeof payload === "undefined" ? null : JSON.stringify(payload));
+        } catch (err) {
+            done("Browser request error: " + (err.message || err), null);
+        }
+    }
+
+    function xhrPost(url, payload, done) {
+        xhrJson("POST", url, payload, done);
+    }
+
+    function xhrDelete(url, done) {
+        xhrJson("DELETE", url, null, done);
+    }
+
     function loadStore(key) {
         try {
             var raw = window.localStorage ? localStorage.getItem(key) : null;
@@ -171,6 +220,214 @@
             fitMode: state.fitMode,
             quality: state.quality,
             zoomPercent: state.zoomPercent
+        });
+    }
+
+    function clearLegacyGrowingStorage() {
+        try {
+            if (!window.localStorage) return;
+            localStorage.removeItem(LEGACY_BOOKMARKS_KEY);
+            localStorage.removeItem(LEGACY_HISTORY_KEY);
+            localStorage.removeItem(LEGACY_PROGRESS_KEY);
+        } catch (e) {}
+    }
+
+    function refreshAccountButton() {
+        var button = el("accountBtn");
+        if (!button) return;
+        button.innerHTML = state.authUser ? escapeHtml(state.authUser.username) : "Login";
+    }
+
+    function setAuthUser(user) {
+        state.authUser = user || null;
+        state.authChecked = true;
+        state.currentMangaSaved = false;
+        state.currentMangaSavedKnown = false;
+        refreshAccountButton();
+    }
+
+    function checkAuth(done) {
+        xhrGet("/api/auth/me", function (err, json) {
+            if (err || !json) {
+                state.authUser = null;
+                state.authChecked = true;
+                state.authDatabaseConfigured = false;
+                state.resetEmailConfigured = false;
+            } else {
+                state.authDatabaseConfigured = !!json.databaseConfigured;
+                state.resetEmailConfigured = !!json.mailConfigured;
+                setAuthUser(json.authenticated ? json.user : null);
+            }
+            refreshAccountButton();
+            if (done) done();
+        });
+    }
+
+    function requireLoginView(message) {
+        var html = '<div class="heading">Account required</div>';
+        html += '<div class="notice">' + escapeHtml(message || "Please log in to use this feature.") + '</div>';
+        html += '<button id="openLoginFromNotice" type="button" class="btn btn-dark btn-wide">Login / Register</button>';
+        showHtml(html);
+        el("openLoginFromNotice").onclick = showAccount;
+    }
+
+    function showAccount() {
+        leaveReaderMode();
+        if (!state.authDatabaseConfigured) {
+            showHtml('<div class="heading">Account</div><div class="notice">Account storage is not configured on the server. Add DATABASE_URL on Render.</div>');
+            setStatus("Account database is not configured.", true);
+            return;
+        }
+        if (state.authUser) {
+            var html = '<div class="heading">Account</div>';
+            html += '<div class="account-card"><b>Username:</b> ' + escapeHtml(state.authUser.username) + '<br><b>Email:</b> ' + escapeHtml(state.authUser.email) + '</div>';
+            html += '<div class="notice">Reading history, page progress and Saved Manga are synced to the server. Kindle keeps only small reader settings and the current in-memory page cache.</div>';
+            html += '<button id="accountHistory" type="button" class="btn btn-wide">Reading History</button>';
+            html += '<button id="accountSaved" type="button" class="btn btn-wide">Saved Manga</button>';
+            html += '<button id="logoutBtn" type="button" class="btn btn-dark btn-wide">Log out</button>';
+            showHtml(html);
+            el("accountHistory").onclick = function () { showHistory(1); };
+            el("accountSaved").onclick = function () { showSaved(1); };
+            el("logoutBtn").onclick = logoutAccount;
+            setStatus("Logged in as " + state.authUser.username + ".", false);
+            return;
+        }
+        showLoginForm();
+    }
+
+    function showLoginForm() {
+        var html = '<div class="heading">Login</div>';
+        html += '<div class="auth-form">';
+        html += '<label class="auth-label">Username or email</label><input id="loginIdentifier" class="auth-input" type="text" maxlength="254">';
+        html += '<label class="auth-label">Password</label><input id="loginPassword" class="auth-input" type="password" maxlength="128">';
+        html += '<button id="loginSubmit" type="button" class="btn btn-dark btn-wide">Login</button>';
+        html += '<button id="registerOpen" type="button" class="btn btn-wide">Create account</button>';
+        html += '<button id="forgotOpen" type="button" class="btn btn-wide">Forgot password</button>';
+        html += '</div>';
+        showHtml(html);
+        el("loginSubmit").onclick = submitLogin;
+        el("registerOpen").onclick = showRegisterForm;
+        el("forgotOpen").onclick = showForgotPasswordForm;
+        el("loginPassword").onkeypress = function (event) {
+            var e = event || window.event;
+            if ((e.keyCode || e.which) === 13) submitLogin();
+        };
+        setStatus("Login to sync reading progress.", false);
+    }
+
+    function submitLogin() {
+        var identifier = trim(el("loginIdentifier").value);
+        var password = el("loginPassword").value || "";
+        if (!identifier || !password) {
+            setStatus("Enter username/email and password.", true);
+            return;
+        }
+        setStatus("Logging in...", false);
+        xhrPost("/api/auth/login", { identifier: identifier, password: password }, function (err, json) {
+            if (err || !json || !json.user) {
+                setStatus(err || "Login failed.", true);
+                return;
+            }
+            setAuthUser(json.user);
+            showAccount();
+        });
+    }
+
+    function showRegisterForm() {
+        var html = '<div class="heading">Create Account</div>';
+        html += '<div class="auth-form">';
+        html += '<label class="auth-label">Username</label><input id="registerUsername" class="auth-input" type="text" maxlength="32">';
+        html += '<label class="auth-label">Email</label><input id="registerEmail" class="auth-input" type="text" maxlength="254">';
+        html += '<label class="auth-label">Password (8+ characters)</label><input id="registerPassword" class="auth-input" type="password" maxlength="128">';
+        html += '<label class="auth-label">Confirm password</label><input id="registerConfirm" class="auth-input" type="password" maxlength="128">';
+        html += '<button id="registerSubmit" type="button" class="btn btn-dark btn-wide">Register</button>';
+        html += '<button id="registerBack" type="button" class="btn btn-wide">Back to login</button>';
+        html += '</div>';
+        showHtml(html);
+        el("registerSubmit").onclick = submitRegister;
+        el("registerBack").onclick = showLoginForm;
+        setStatus("Create a small server account for reading sync.", false);
+    }
+
+    function submitRegister() {
+        var username = trim(el("registerUsername").value);
+        var email = trim(el("registerEmail").value);
+        var password = el("registerPassword").value || "";
+        var confirm = el("registerConfirm").value || "";
+        if (password !== confirm) {
+            setStatus("Passwords do not match.", true);
+            return;
+        }
+        setStatus("Creating account...", false);
+        xhrPost("/api/auth/register", { username: username, email: email, password: password }, function (err, json) {
+            if (err || !json || !json.user) {
+                setStatus(err || "Registration failed.", true);
+                return;
+            }
+            setAuthUser(json.user);
+            showAccount();
+        });
+    }
+
+    function showForgotPasswordForm() {
+        var html = '<div class="heading">Reset Password</div>';
+        if (!state.resetEmailConfigured) {
+            html += '<div class="notice">Password reset email is not configured on the server. Add Brevo or Resend email settings plus AUTH_SECRET.</div>';
+        }
+        html += '<div class="auth-form">';
+        html += '<label class="auth-label">Username or email</label><input id="resetIdentifier" class="auth-input" type="text" maxlength="254">';
+        html += '<button id="sendResetCode" type="button" class="btn btn-wide">Send 6-digit code</button>';
+        html += '<hr class="auth-rule">';
+        html += '<label class="auth-label">6-digit code</label><input id="resetCode" class="auth-input auth-code" type="text" maxlength="6">';
+        html += '<label class="auth-label">New password (8+ characters)</label><input id="resetPassword" class="auth-input" type="password" maxlength="128">';
+        html += '<button id="resetSubmit" type="button" class="btn btn-dark btn-wide">Set new password</button>';
+        html += '<button id="resetBack" type="button" class="btn btn-wide">Back to login</button>';
+        html += '</div>';
+        showHtml(html);
+        el("sendResetCode").onclick = sendResetCode;
+        el("resetSubmit").onclick = submitResetPassword;
+        el("resetBack").onclick = showLoginForm;
+        setStatus("Password reset codes expire after a short time.", false);
+    }
+
+    function sendResetCode() {
+        var identifier = trim(el("resetIdentifier").value);
+        if (!identifier) {
+            setStatus("Enter your username or email first.", true);
+            return;
+        }
+        setStatus("Sending reset code...", false);
+        xhrPost("/api/auth/forgot-password", { identifier: identifier }, function (err, json) {
+            if (err) {
+                setStatus(err, true);
+                return;
+            }
+            setStatus((json && json.message) || "If the account exists, a reset code was sent.", false);
+        });
+    }
+
+    function submitResetPassword() {
+        var identifier = trim(el("resetIdentifier").value);
+        var code = trim(el("resetCode").value);
+        var newPassword = el("resetPassword").value || "";
+        setStatus("Resetting password...", false);
+        xhrPost("/api/auth/reset-password", { identifier: identifier, code: code, newPassword: newPassword }, function (err, json) {
+            if (err || !json || !json.user) {
+                setStatus(err || "Password reset failed.", true);
+                return;
+            }
+            setAuthUser(json.user);
+            showAccount();
+            setStatus("Password changed. You are logged in.", false);
+        });
+    }
+
+    function logoutAccount() {
+        setStatus("Logging out...", false);
+        xhrPost("/api/auth/logout", {}, function () {
+            setAuthUser(null);
+            showAccount();
+            setStatus("Logged out. Reading progress will not be stored until you log in again.", false);
         });
     }
 
@@ -387,8 +644,11 @@
         state.chapterOffset = 0;
         state.chapterTotal = 0;
         state.chapterLoading = false;
+        state.currentMangaSaved = false;
+        state.currentMangaSavedKnown = false;
         renderMangaDetail(manga, true);
         loadChapters(manga.id, 0);
+        if (state.authUser) checkCurrentMangaSaved(manga);
     }
 
     function getVisibleChapters() {
@@ -424,7 +684,7 @@
         var title = getTitle(manga);
         var desc = getDescription(manga);
         var cover = getCover(manga);
-        var saved = isSaved(manga.id);
+        var saved = !!(state.currentMangaSavedKnown && state.currentMangaSaved);
         var visibleChapters = getVisibleChapters();
         var total = state.chapterTotal || visibleChapters.length;
         var startNumber = visibleChapters.length ? state.chapterOffset + 1 : 0;
@@ -440,7 +700,7 @@
         html += '<div class="description">' + escapeHtml(desc) + "</div>";
         html +=
             '<button id="bookmarkCurrent" type="button" class="btn btn-dark">' +
-            (saved ? "Remove saved" : "Save manga") +
+            (!state.authUser ? "Login to save" : (saved ? "Remove saved" : "Save manga")) +
             "</button>";
         html +=
             '<button id="backHome" type="button" class="btn">Back home</button>';
@@ -462,7 +722,6 @@
         el("backHome").onclick = loadHome;
         el("bookmarkCurrent").onclick = function () {
             toggleSaved(manga);
-            renderMangaDetail(manga, false);
         };
         if (!loadingChapters) {
             bindChapterButtons();
@@ -819,44 +1078,43 @@
         };
     }
 
-    function getSavedPage(chapterId, pageCount) {
-        var progress = loadObject(PROGRESS_KEY);
-        var item = progress[chapterId];
-        var p =
-            item && typeof item.pageIndex !== "undefined"
-                ? parseInt(item.pageIndex, 10)
-                : 0;
-        if (isNaN(p) || p < 0) p = 0;
-        if (pageCount && p >= pageCount) p = pageCount - 1;
-        return p;
+    function loadSavedPage(chapterId, pageCount, done) {
+        if (!state.authUser) {
+            done(0);
+            return;
+        }
+        xhrGet("/api/reading/progress/" + encodeURIComponent(chapterId), function (err, json) {
+            var item, p;
+            if (err || !json || !json.item) {
+                done(0);
+                return;
+            }
+            item = json.item;
+            p = parseInt(item.page_index, 10);
+            if (isNaN(p) || p < 0) p = 0;
+            if (pageCount && p >= pageCount) p = pageCount - 1;
+            done(p);
+        });
     }
 
     function savePageProgress() {
-        var progress, keys, k, oldestKey, oldestTime, count, item;
-        if (!state.currentChapterId) return;
-        progress = loadObject(PROGRESS_KEY);
-        progress[state.currentChapterId] = {
+        var manga, chapter, a;
+        if (!state.authUser || !state.currentChapterId) return;
+        manga = state.currentManga;
+        chapter = state.currentChapter;
+        a = chapter && chapter.attributes ? chapter.attributes : {};
+        xhrPost("/api/reading/progress", {
+            mangaId: manga ? manga.id : "",
+            mangaTitle: manga ? getTitle(manga) : "Manga",
+            chapterId: state.currentChapterId,
+            chapterNumber: a.chapter || a.volume || "",
+            isVolume: !!a.volume && !a.chapter,
             pageIndex: state.pageIndex,
             pageCount: currentPageCount(),
-            mangaId: state.currentManga ? state.currentManga.id : "",
-            when: new Date().getTime()
-        };
-        count = 0;
-        oldestKey = "";
-        oldestTime = null;
-        for (k in progress) {
-            if (Object.prototype.hasOwnProperty.call(progress, k)) {
-                count += 1;
-                item = progress[k] || {};
-                if (oldestTime === null || (item.when || 0) < oldestTime) {
-                    oldestTime = item.when || 0;
-                    oldestKey = k;
-                }
-            }
-        }
-        if (count > 100 && oldestKey && oldestKey !== state.currentChapterId)
-            delete progress[oldestKey];
-        saveStore(PROGRESS_KEY, progress);
+            clientMillis: new Date().getTime()
+        }, function (err) {
+            if (err && err === "Please log in") setAuthUser(null);
+        });
     }
 
     function openChapter(chapter) {
@@ -884,7 +1142,6 @@
         state.translationError = "";
         state.translationRequestSerial += 1;
         state.preloadImages = [];
-        rememberHistory(chapter);
         setStatus("Loading chapter pages...", false);
         showHtml(
             '<div class="heading">Reader</div><div class="notice">Loading page list...</div>'
@@ -919,9 +1176,12 @@
                     setStatus("No pages in chapter.", true);
                     return;
                 }
-                state.pageIndex = getSavedPage(chapter.id, currentPageCount());
-                setStatus("Reader ready.", false);
-                renderReader();
+                loadSavedPage(chapter.id, currentPageCount(), function (savedPage) {
+                    if (chapter.id !== state.currentChapterId) return;
+                    state.pageIndex = savedPage;
+                    setStatus(state.authUser ? "Reader ready. Progress sync is on." : "Reader ready. Login to save progress.", false);
+                    renderReader();
+                });
             }
         );
     }
@@ -1499,96 +1759,146 @@
         }
     }
 
-    function isSaved(id) {
-        var list = loadStore(BOOKMARKS_KEY);
-        var i;
-        for (i = 0; i < list.length; i += 1) if (list[i].id === id) return true;
-        return false;
+    function checkCurrentMangaSaved(manga) {
+        if (!manga || state.currentManga !== manga) return;
+        if (!state.authUser) {
+            state.currentMangaSaved = false;
+            state.currentMangaSavedKnown = false;
+            renderMangaDetail(manga, state.chapterLoading);
+            return;
+        }
+        xhrGet("/api/reading/saved/check/" + encodeURIComponent(manga.id), function (err, json) {
+            if (state.currentManga !== manga) return;
+            if (!err && json) {
+                state.currentMangaSaved = !!json.saved;
+                state.currentMangaSavedKnown = true;
+                renderMangaDetail(manga, state.chapterLoading);
+            }
+        });
     }
 
     function toggleSaved(manga) {
-        var list = loadStore(BOOKMARKS_KEY);
-        var i,
-            found = -1;
-        for (i = 0; i < list.length; i += 1)
-            if (list[i].id === manga.id) found = i;
-        if (found >= 0) list.splice(found, 1);
-        else list.unshift({ id: manga.id, title: getTitle(manga) });
-        saveStore(BOOKMARKS_KEY, list);
-    }
-
-    function showSaved() {
-        leaveReaderMode();
-        var list = loadStore(BOOKMARKS_KEY);
-        var html = '<div class="heading">Saved Manga</div>';
-        var i;
-        if (!list.length)
-            html += '<div class="notice">No saved manga yet.</div>';
-        for (i = 0; i < list.length; i += 1) {
-            html +=
-                '<button type="button" class="chapter saved-open" data-id="' +
-                escapeHtml(list[i].id) +
-                '">' +
-                escapeHtml(list[i].title) +
-                "</button>";
+        if (!state.authUser) {
+            requireLoginView("Login first to save manga on the server.");
+            return;
         }
-        showHtml(html);
-        bindIdButtons("saved-open");
-        setStatus(list.length + " saved manga.", false);
-    }
-
-    function rememberHistory(chapter) {
-        var list = loadStore(HISTORY_KEY);
-        var manga = state.currentManga;
-        var a = chapter.attributes || {};
-        var item = {
-            mangaId: manga ? manga.id : "",
-            mangaTitle: manga ? getTitle(manga) : "Manga",
-            chapterId: chapter.id,
-            chapter: a.chapter || a.volume || "",
-            isVolume: !!a.volume && !a.chapter,
-            when: new Date().getTime()
-        };
-        var i;
-        for (i = list.length - 1; i >= 0; i -= 1)
-            if (list[i].chapterId === item.chapterId) list.splice(i, 1);
-        list.unshift(item);
-        if (list.length > 20) list = list.slice(0, 20);
-        saveStore(HISTORY_KEY, list);
-    }
-
-    function showHistory() {
-        leaveReaderMode();
-        var list = loadStore(HISTORY_KEY);
-        var progress = loadObject(PROGRESS_KEY);
-        var html = '<div class="heading">Reading History</div>';
-        var i, label, saved, pageText;
-        if (!list.length)
-            html += '<div class="notice">No reading history yet.</div>';
-        for (i = 0; i < list.length; i += 1) {
-            label =
-                list[i].mangaTitle +
-                (list[i].chapter
-                    ? " - " + (list[i].isVolume ? "Vol. " : "Ch. ") + list[i].chapter
-                    : "");
-            saved = progress[list[i].chapterId] || {};
-            pageText = typeof saved.pageIndex !== "undefined"
-                ? " - Page " + (parseInt(saved.pageIndex, 10) + 1)
-                : "";
-            html +=
-                '<button type="button" class="chapter history-open" data-manga-id="' +
-                escapeHtml(list[i].mangaId) +
-                '" data-chapter-id="' +
-                escapeHtml(list[i].chapterId) +
-                '"><span class="chapter-main">' +
-                escapeHtml(label) +
-                '</span><span class="chapter-meta">Resume directly' +
-                escapeHtml(pageText) +
-                "</span></button>";
+        setStatus(state.currentMangaSaved ? "Removing saved manga..." : "Saving manga...", false);
+        if (state.currentMangaSaved) {
+            xhrDelete("/api/reading/saved/" + encodeURIComponent(manga.id), function (err) {
+                if (err) {
+                    setStatus(err, true);
+                    return;
+                }
+                state.currentMangaSaved = false;
+                state.currentMangaSavedKnown = true;
+                renderMangaDetail(manga, false);
+                setStatus("Removed from Saved Manga.", false);
+            });
+        } else {
+            xhrPost("/api/reading/saved", { mangaId: manga.id, mangaTitle: getTitle(manga) }, function (err) {
+                if (err) {
+                    setStatus(err, true);
+                    return;
+                }
+                state.currentMangaSaved = true;
+                state.currentMangaSavedKnown = true;
+                renderMangaDetail(manga, false);
+                setStatus("Saved on server.", false);
+            });
         }
-        showHtml(html);
-        bindHistoryButtons();
-        setStatus(list.length + " history items.", false);
+    }
+
+    function renderDataPager(prefix, page, pages) {
+        if (pages <= 1) return "";
+        var html = '<div class="data-pager">';
+        html += '<button id="' + prefix + 'Prev" type="button" class="btn">Prev</button>';
+        html += '<span class="data-page-label">Page ' + page + ' / ' + pages + '</span>';
+        html += '<button id="' + prefix + 'Next" type="button" class="btn">Next</button>';
+        html += '</div>';
+        return html;
+    }
+
+    function showSaved(pageNumber) {
+        leaveReaderMode();
+        if (!state.authUser) {
+            requireLoginView("Saved Manga is stored on the server and requires login.");
+            return;
+        }
+        pageNumber = parseInt(pageNumber, 10);
+        if (isNaN(pageNumber) || pageNumber < 1) pageNumber = 1;
+        setStatus("Loading Saved Manga...", false);
+        showHtml('<div class="heading">Saved Manga</div><div class="notice">Loading...</div>');
+        xhrGet("/api/reading/saved?page=" + pageNumber + "&limit=40", function (err, json) {
+            var list, html, i;
+            if (err || !json) {
+                setStatus(err || "Could not load Saved Manga.", true);
+                return;
+            }
+            list = json.items || [];
+            state.savedPage = parseInt(json.page, 10) || 1;
+            state.savedPages = parseInt(json.pages, 10) || 1;
+            html = '<div class="heading">Saved Manga</div>';
+            html += renderDataPager("savedPager", state.savedPage, state.savedPages);
+            if (!list.length) html += '<div class="notice">No saved manga yet.</div>';
+            for (i = 0; i < list.length; i += 1) {
+                html += '<button type="button" class="chapter saved-open" data-id="' +
+                    escapeHtml(list[i].manga_id) + '"><span class="chapter-main">' +
+                    escapeHtml(list[i].manga_title || list[i].manga_id) + '</span></button>';
+            }
+            html += renderDataPager("savedPagerBottom", state.savedPage, state.savedPages);
+            showHtml(html);
+            bindIdButtons("saved-open");
+            bindDataPager("savedPager", state.savedPage, state.savedPages, showSaved);
+            bindDataPager("savedPagerBottom", state.savedPage, state.savedPages, showSaved);
+            setStatus(json.total + " saved manga. Server page " + state.savedPage + "/" + state.savedPages + ".", false);
+        });
+    }
+
+    function showHistory(pageNumber) {
+        leaveReaderMode();
+        if (!state.authUser) {
+            requireLoginView("Reading History is stored on the server and requires login.");
+            return;
+        }
+        pageNumber = parseInt(pageNumber, 10);
+        if (isNaN(pageNumber) || pageNumber < 1) pageNumber = 1;
+        setStatus("Loading reading history...", false);
+        showHtml('<div class="heading">Reading History</div><div class="notice">Loading...</div>');
+        xhrGet("/api/reading/history?page=" + pageNumber + "&limit=40", function (err, json) {
+            var list, html, i, label, pageText;
+            if (err || !json) {
+                setStatus(err || "Could not load reading history.", true);
+                return;
+            }
+            list = json.items || [];
+            state.historyPage = parseInt(json.page, 10) || 1;
+            state.historyPages = parseInt(json.pages, 10) || 1;
+            html = '<div class="heading">Reading History</div>';
+            html += renderDataPager("historyPager", state.historyPage, state.historyPages);
+            if (!list.length) html += '<div class="notice">No reading history yet.</div>';
+            for (i = 0; i < list.length; i += 1) {
+                label = (list[i].manga_title || "Manga") +
+                    (list[i].chapter_number ? " - " + (list[i].is_volume ? "Vol. " : "Ch. ") + list[i].chapter_number : "");
+                pageText = typeof list[i].page_index !== "undefined" ? " - Page " + (parseInt(list[i].page_index, 10) + 1) : "";
+                html += '<button type="button" class="chapter history-open" data-manga-id="' +
+                    escapeHtml(list[i].manga_id) + '" data-chapter-id="' + escapeHtml(list[i].chapter_id) + '">' +
+                    '<span class="chapter-main">' + escapeHtml(label) + '</span>' +
+                    '<span class="chapter-meta">Resume directly' + escapeHtml(pageText) + '</span></button>';
+            }
+            html += renderDataPager("historyPagerBottom", state.historyPage, state.historyPages);
+            showHtml(html);
+            bindHistoryButtons();
+            bindDataPager("historyPager", state.historyPage, state.historyPages, showHistory);
+            bindDataPager("historyPagerBottom", state.historyPage, state.historyPages, showHistory);
+            setStatus(json.total + " history items. Showing up to 40 per page.", false);
+        });
+    }
+
+    function bindDataPager(prefix, page, pages, handler) {
+        var prev = el(prefix + "Prev");
+        var next = el(prefix + "Next");
+        if (prev) prev.onclick = function () { if (page > 1) handler(page - 1); };
+        if (next) next.onclick = function () { if (page < pages) handler(page + 1); };
     }
 
     function bindHistoryButtons() {
@@ -1658,31 +1968,35 @@
         loadReaderSettings();
         el("searchBtn").onclick = doSearch;
         el("homeBtn").onclick = loadHome;
-        el("savedBtn").onclick = showSaved;
-        el("historyBtn").onclick = showHistory;
+        el("savedBtn").onclick = function () { showSaved(1); };
+        el("historyBtn").onclick = function () { showHistory(1); };
+        el("accountBtn").onclick = showAccount;
+        refreshAccountButton();
         el("search").onkeypress = function (evt) {
             evt = evt || window.event;
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v19 started. 5-page image window + current/+2 translation + SFX quota saver. Testing local API...", false);
+        setStatus("ES5 v20 started. Neon account sync + 40-row server history. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
                 showHtml(
-                    '<div class="notice">The browser can run this app, but the local server API is not responding.</div>'
+                    '<div class="notice">The browser can run this app, but the server API is not responding.</div>'
                 );
                 return;
             }
-            xhrGet("/api/translation/status", function (translationErr, translationInfo) {
-                if (!translationErr && translationInfo) {
-                    state.translationAvailable = !!translationInfo.enabled;
-                    state.translationPrefetchAhead = parseInt(translationInfo.prefetchAhead, 10);
-                    if (!isFinite(state.translationPrefetchAhead)) state.translationPrefetchAhead = 2;
-                } else {
-                    state.translationAvailable = false;
-                }
-                loadHome();
+            checkAuth(function () {
+                xhrGet("/api/translation/status", function (translationErr, translationInfo) {
+                    if (!translationErr && translationInfo) {
+                        state.translationAvailable = !!translationInfo.enabled;
+                        state.translationPrefetchAhead = parseInt(translationInfo.prefetchAhead, 10);
+                        if (!isFinite(state.translationPrefetchAhead)) state.translationPrefetchAhead = 2;
+                    } else {
+                        state.translationAvailable = false;
+                    }
+                    loadHome();
+                });
             });
         });
     }

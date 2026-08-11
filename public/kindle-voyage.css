@@ -110,3 +110,13 @@ a { color: #000; }
 .reader-chapter-go { width: 14%; min-width: 44px; min-height: 48px; padding: 8px 2px; font-size: 14px; }
 .reader-chapter-btn:disabled { color: #777; border-color: #777; }
 .reader-active .page-frame { min-height: 100px; }
+
+/* ES5 v20 server account + Neon reading sync */
+.auth-form { border: 2px solid #000; padding: 10px; margin: 8px 0; }
+.auth-label { display: block; font-weight: bold; font-size: 14px; margin: 8px 0 3px 0; }
+.auth-input { display: block; width: 100%; height: 42px; border: 2px solid #000; background: #fff; color: #000; padding: 5px 7px; font-size: 17px; }
+.auth-code { letter-spacing: 4px; font-size: 20px; font-weight: bold; text-align: center; }
+.auth-rule { border: 0; border-top: 2px solid #000; margin: 14px 0; }
+.account-card { border: 2px solid #000; padding: 10px; margin: 8px 0; font-size: 15px; }
+.data-pager { border: 2px solid #000; padding: 5px; margin: 7px 0; text-align: center; }
+.data-page-label { display: inline-block; padding: 8px 10px; font-size: 14px; font-weight: bold; }

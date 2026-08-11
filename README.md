@@ -137,3 +137,20 @@ TRANSLATION_ALLOW_FALLBACK=false
 ```
 
 With fallback disabled, an incomplete Qwen page is not retried with Llama and missing regions are simply left in the original artwork. Set `TRANSLATION_ALLOW_FALLBACK=true` only if you prefer completeness over neuron usage.
+
+## ES5 v20: Neon accounts + server-side reading history
+
+ES5 v20 moves growing user data off the Kindle browser and into PostgreSQL/Neon:
+
+- username + email + password account
+- persistent server sessions via a small HttpOnly cookie
+- reading history and chapter/page progress
+- Saved Manga
+- password reset using a 6-digit email code
+- History API/UI pagination at 40 rows per page
+
+The Kindle no longer writes new history/progress/bookmark collections to localStorage.
+Only fixed-size reader settings (fit mode, image quality, zoom) remain persistent on
+the Kindle. The five-page translation hot cache and image preload window remain RAM-only.
+
+See `NEON_ACCOUNT_SETUP.md` and `.env.example` for Render/Neon/email configuration.
