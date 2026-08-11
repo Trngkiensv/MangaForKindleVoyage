@@ -27,6 +27,7 @@ export type ParsedBook = {
   modifiedTime: string;
   size: number;
   sections: ParsedBookSection[];
+  resourceDir: string;
 };
 
 type DriveToken = { token: string; expiresAt: number };
@@ -250,19 +251,106 @@ function plainTextLength(html: string) {
   return html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&[a-z0-9#]+;/gi, 'x').replace(/\s+/g, ' ').trim().length;
 }
 
+function escapeHtmlAttribute(value: string) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function decodeHtmlAttribute(value: string) {
+  return String(value || '')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&');
+}
+
+function imageExtension(sourcePath: string) {
+  const ext = path.extname(sourcePath).toLowerCase().replace(/[^.a-z0-9]/g, '');
+  if (ext && ext.length <= 9) return ext;
+  return '.img';
+}
+
+function localResourcePath(srcRaw: string, resourceDir: string) {
+  let src = decodeHtmlAttribute(srcRaw).trim();
+  if (!src || /^data:/i.test(src) || /^https?:/i.test(src) || /^javascript:/i.test(src)) return '';
+  if (/^file:\/\//i.test(src)) {
+    src = src.replace(/^file:\/\//i, '');
+    try { src = decodeURIComponent(src); } catch (_error) {}
+  }
+  let candidate = path.isAbsolute(src) ? path.normalize(src) : path.resolve(resourceDir, src);
+  const base = path.resolve(resourceDir);
+  const relative = path.relative(base, candidate);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return '';
+  return candidate;
+}
+
+async function copyBookImage(sourcePath: string, resourceDir: string) {
+  const relative = path.relative(path.resolve(resourceDir), path.resolve(sourcePath));
+  const key = crypto.createHash('sha256').update(relative).digest('hex').slice(0, 24) + imageExtension(sourcePath);
+  const servedDir = path.join(resourceDir, '_served');
+  const destination = path.join(servedDir, key);
+  await fs.mkdir(servedDir, { recursive: true });
+  try {
+    await fs.access(destination);
+  } catch (_missing) {
+    await fs.copyFile(sourcePath, destination);
+  }
+  return key;
+}
+
+async function rewriteBookImages(raw: string, resourceDir: string, bookId: string) {
+  const html = String(raw || '');
+  const regex = /<img\b[^>]*>/gi;
+  let output = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(html))) {
+    output += html.slice(lastIndex, match.index);
+    lastIndex = regex.lastIndex;
+    const tag = match[0];
+    const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const altMatch = tag.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const src = srcMatch ? String(srcMatch[1] || srcMatch[2] || srcMatch[3] || '') : '';
+    const alt = altMatch ? String(altMatch[1] || altMatch[2] || altMatch[3] || '') : '';
+    const sourcePath = localResourcePath(src, resourceDir);
+    if (!sourcePath) continue;
+    try {
+      const key = await copyBookImage(sourcePath, resourceDir);
+      const assetUrl = `/api/books/${encodeURIComponent(bookId)}/asset/${encodeURIComponent(key)}`;
+      output += `<img src="${escapeHtmlAttribute(assetUrl)}" alt="${escapeHtmlAttribute(decodeHtmlAttribute(alt))}">`;
+    } catch (_imageError) {
+      // A missing/corrupt image should not make the whole text section fail.
+    }
+  }
+  output += html.slice(lastIndex);
+  return output;
+}
+
 function sanitizeBookHtml(raw: string) {
   let html = String(raw || '');
+  const safeImages: string[] = [];
+  html = html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const srcMatch = tag.match(/\bsrc\s*=\s*"([^"]+)"/i);
+    const altMatch = tag.match(/\balt\s*=\s*"([^"]*)"/i);
+    const src = srcMatch ? String(srcMatch[1] || '') : '';
+    if (!/^\/api\/books\/[^/]+\/asset\/[a-f0-9]{24}\.[a-z0-9]{1,8}$/i.test(src)) return '';
+    const alt = altMatch ? String(altMatch[1] || '') : '';
+    const marker = `BOOKIMGTOKEN${safeImages.length}TOKEN`;
+    safeImages.push(`<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}">`);
+    return marker;
+  });
   html = html.replace(/<!--[\s\S]*?-->/g, '');
   html = html.replace(/<\s*(script|style|iframe|object|embed|svg|canvas|form|textarea|select|button|input|video|audio|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
   html = html.replace(/<\s*(script|style|iframe|object|embed|svg|canvas|form|textarea|select|button|input|video|audio|link|meta)[^>]*\/?>/gi, '');
-  html = html.replace(/<img\b[^>]*>/gi, '');
   html = html.replace(/<a\b[^>]*>/gi, '<span>').replace(/<\/a>/gi, '</span>');
   const allowed: Record<string, boolean> = {
     p: true, div: true, span: true, br: true, hr: true,
     h1: true, h2: true, h3: true, h4: true, h5: true, h6: true,
     em: true, i: true, strong: true, b: true, u: true, s: true,
     blockquote: true, ul: true, ol: true, li: true, pre: true, code: true,
-    sup: true, sub: true, center: true,
+    sup: true, sub: true, center: true, figure: true, figcaption: true,
   };
   html = html.replace(/<\s*(\/?)\s*([a-z0-9]+)(?:\s[^>]*)?>/gi, (_match, closing, tagRaw) => {
     const tag = String(tagRaw || '').toLowerCase();
@@ -270,6 +358,7 @@ function sanitizeBookHtml(raw: string) {
     if (tag === 'br' || tag === 'hr') return `<${tag}>`;
     return closing ? `</${tag}>` : `<${tag}>`;
   });
+  html = html.replace(/BOOKIMGTOKEN(\d+)TOKEN/g, (_match, indexRaw) => safeImages[parseInt(String(indexRaw), 10)] || '');
   html = html.replace(/\s{3,}/g, ' ');
   return html.trim();
 }
@@ -316,6 +405,7 @@ async function parseEpub(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
   if (typeof initEpubFile !== 'function') throw new Error('EPUB parser failed to load');
   const resourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kindle-epub-'));
   let epub: any = null;
+  let completed = false;
   try {
     epub = await initEpubFile(bytes as any, resourceDir);
     const metadata: any = epub.getMetadata ? epub.getMetadata() : {};
@@ -328,15 +418,17 @@ async function parseEpub(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
       if (!id) continue;
       const chapter: any = await epub.loadChapter(id);
       if (!chapter || !chapter.html) continue;
-      const html = sanitizeBookHtml(String(chapter.html));
-      if (plainTextLength(html) < 2) continue;
+      const withImages = await rewriteBookImages(String(chapter.html), resourceDir, item.id);
+      const html = sanitizeBookHtml(withImages);
+      if (plainTextLength(html) < 2 && !/<img\b/i.test(html)) continue;
       sections.push({
         index: sections.length,
         title: labels[id] || firstHeading(html) || `Section ${sections.length + 1}`,
         html,
       });
     }
-    if (!sections.length) throw new Error('No readable EPUB text sections were found');
+    if (!sections.length) throw new Error('No readable EPUB sections were found');
+    completed = true;
     return {
       id: item.id,
       name: item.name,
@@ -346,10 +438,18 @@ async function parseEpub(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
       modifiedTime: item.modifiedTime,
       size: item.size,
       sections,
+      resourceDir,
     };
   } finally {
-    try { if (epub && epub.destroy) epub.destroy(); } catch (_error) {}
-    await fs.rm(resourceDir, { recursive: true, force: true }).catch(() => {});
+    // On success, keep only the parser-extracted temp files until this book is
+    // evicted from our tiny LRU cache. The parser object itself becomes
+    // unreachable, so its in-memory ebook buffer can be garbage-collected.
+    // Calling destroy() here would delete the Node resource files that the
+    // image endpoint needs.
+    if (!completed) {
+      try { if (epub && epub.destroy) epub.destroy(); } catch (_error) {}
+      await fs.rm(resourceDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -359,6 +459,7 @@ async function parseAzw3(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
   if (typeof initKf8File !== 'function') throw new Error('AZW3 parser failed to load');
   const resourceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kindle-azw3-'));
   let kf8: any = null;
+  let completed = false;
   try {
     kf8 = await initKf8File(bytes as any, resourceDir);
     const metadata: any = kf8.getMetadata ? kf8.getMetadata() : {};
@@ -370,15 +471,17 @@ async function parseAzw3(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
       if (!id) continue;
       const chapter: any = await Promise.resolve(kf8.loadChapter(id));
       if (!chapter || !chapter.html) continue;
-      const html = sanitizeBookHtml(String(chapter.html));
-      if (plainTextLength(html) < 2) continue;
+      const withImages = await rewriteBookImages(String(chapter.html), resourceDir, item.id);
+      const html = sanitizeBookHtml(withImages);
+      if (plainTextLength(html) < 2 && !/<img\b/i.test(html)) continue;
       sections.push({
         index: sections.length,
         title: labels[id] || firstHeading(html) || `Section ${sections.length + 1}`,
         html,
       });
     }
-    if (!sections.length) throw new Error('No readable AZW3 text sections were found');
+    if (!sections.length) throw new Error('No readable AZW3 sections were found');
+    completed = true;
     return {
       id: item.id,
       name: item.name,
@@ -388,10 +491,13 @@ async function parseAzw3(item: DriveBookItem, bytes: Uint8Array): Promise<Parsed
       modifiedTime: item.modifiedTime,
       size: item.size,
       sections,
+      resourceDir,
     };
   } finally {
-    try { if (kf8 && kf8.destroy) kf8.destroy(); } catch (_error) {}
-    await fs.rm(resourceDir, { recursive: true, force: true }).catch(() => {});
+    if (!completed) {
+      try { if (kf8 && kf8.destroy) kf8.destroy(); } catch (_error) {}
+      await fs.rm(resourceDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -401,7 +507,11 @@ function touchBookCache(key: string, book: ParsedBook) {
   while (parsedBookCache.size > BOOK_PARSE_CACHE_LIMIT) {
     const oldestKey = parsedBookCache.keys().next().value;
     if (!oldestKey) break;
+    const oldest = parsedBookCache.get(oldestKey);
     parsedBookCache.delete(oldestKey);
+    if (oldest?.book?.resourceDir) {
+      fs.rm(oldest.book.resourceDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -419,6 +529,18 @@ export async function getParsedDriveBook(fileIdRaw: unknown) {
   const book = item.format === 'epub' ? await parseEpub(item, bytes) : await parseAzw3(item, bytes);
   touchBookCache(cacheKey, book);
   return book;
+}
+
+export async function getDriveBookAsset(fileIdRaw: unknown, assetKeyRaw: unknown) {
+  const assetKey = String(assetKeyRaw || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{24}\.[a-z0-9]{1,8}$/.test(assetKey)) throw new Error('Invalid book image key');
+  const book = await getParsedDriveBook(fileIdRaw);
+  const servedDir = path.join(book.resourceDir, '_served');
+  const assetPath = path.join(servedDir, assetKey);
+  const relative = path.relative(servedDir, assetPath);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Invalid book image path');
+  const bytes = await fs.readFile(assetPath);
+  return { bytes, assetKey };
 }
 
 export function clearDriveBookLibraryCache() {

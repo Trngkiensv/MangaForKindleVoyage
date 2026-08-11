@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
-import { getDriveBookPage, getParsedDriveBook, googleBooksConfigured } from './books-drive';
+import { getDriveBookAsset, getDriveBookPage, getParsedDriveBook, googleBooksConfigured } from './books-drive';
 import {
   authDatabaseConfigured,
   cleanupExpiredAuthData,
@@ -439,6 +439,26 @@ app.get('/api/books/:id/section/:index', async (req, res) => {
   }
 });
 
+
+app.get('/api/books/:id/asset/:assetKey', async (req, res) => {
+  try {
+    if (!googleBooksConfigured()) return res.status(503).end();
+    const asset = await getDriveBookAsset(req.params.id, req.params.assetKey);
+    const jpeg = await sharp(asset.bytes, { failOn: 'none', animated: false })
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize({ width: 1100, height: 1500, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82, progressive: false, chromaSubsampling: '4:2:0' })
+      .toBuffer();
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.setHeader('Content-Length', String(jpeg.length));
+    return res.send(jpeg);
+  } catch (_error) {
+    return res.status(404).end();
+  }
+});
+
 app.get('/api/books/:id/progress', async (req, res) => {
   try {
     const user = await requireUser(req, res);
@@ -723,7 +743,7 @@ app.get('/api/image-proxy', async (req, res) => {
           .jpeg({ quality: 78, progressive: false, chromaSubsampling: '4:2:0' })
           .toBuffer();
         res.setHeader('Content-Type', 'image/jpeg');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
         return res.send(jpegCover);
       } catch (coverError) {
         console.error('Kindle cover conversion error:', coverError);
@@ -732,7 +752,7 @@ app.get('/api/image-proxy', async (req, res) => {
     }
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
     return res.send(sourceBuffer);
   } catch (error: any) {
     console.error('Image Proxy Error:', error);

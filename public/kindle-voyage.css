@@ -129,30 +129,38 @@ a { color: #000; }
 .save-manga-card { margin-left: 5px; }
 .save-manga-card:disabled { color: #777; border-color: #777; }
 
-/* ES5 v23: lightweight Google Drive text-book reader */
+/* ES5 v24: screen-paginated Google Drive ebook reader */
 .book-item { border: 2px solid #000; padding: 10px; margin: 8px 0; }
 .book-title { font-family: Georgia, serif; font-size: 19px; font-weight: bold; margin-bottom: 4px; }
 .book-meta { font-size: 12px; font-weight: bold; }
 .book-resume { margin-top: 5px; font-size: 13px; }
 .book-search-row { width: 100%; margin: 5px 0 8px 0; }
 .book-search { width: 68%; }
-.book-reader-active { background: #fff; overflow-x: hidden; }
+.book-reader-active { background: #fff; overflow: hidden; }
 .book-reader-active #app { width: 100%; max-width: none; margin: 0; }
 .book-reader-active .topbar, .book-reader-active #status { display: none; }
-.book-reader-active .content { padding: 0; margin: 0; width: 100%; max-width: none; }
-.book-reader { width: 100%; margin: 0; padding: 0; background: #fff; }
+.book-reader-active .content { padding: 0; margin: 0; width: 100%; max-width: none; overflow: hidden; }
+.book-reader { width: 100%; margin: 0; padding: 0; background: #fff; overflow: hidden; }
 .book-control-shell { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: #fff; border-bottom: 2px solid #000; padding: 3px 2px; }
-.book-control-spacer { width: 100%; height: 58px; }
+.book-control-spacer { width: 100%; height: 58px; margin: 0; padding: 0; }
 .book-reader-row { width: 100%; text-align: center; white-space: nowrap; }
 .book-reader-btn { width: 18%; min-width: 54px; min-height: 44px; margin: 1px; padding: 7px 2px; font-size: 14px; }
 .book-section-count { display: inline-block; width: 16%; min-width: 48px; font-size: 14px; font-weight: bold; text-align: center; vertical-align: middle; }
 .book-settings { border-top: 1px solid #000; padding: 4px 2px; background: #fff; }
-.book-setting-row { width: 100%; text-align: center; white-space: nowrap; }
-.book-setting-row .btn { width: 29%; margin: 2px 1px; padding: 7px 2px; font-size: 13px; }
+.book-setting-row { width: 100%; text-align: center; white-space: nowrap; line-height: normal; }
+.book-setting-button { width: 29% !important; margin: 2px 1px !important; padding: 7px 2px !important; font-size: 13px !important; }
 .book-setting-label { display: inline-block; width: 36%; font-size: 13px; font-weight: bold; text-align: center; vertical-align: middle; }
-.book-text { max-width: 760px; margin: 0 auto; padding-top: 14px; padding-bottom: 60px; color: #000; background: #fff; text-align: left; word-wrap: break-word; overflow-wrap: break-word; }
-.book-text p { margin-top: 0.7em; margin-bottom: 0.7em; }
-.book-text h1, .book-text h2, .book-text h3, .book-text h4, .book-text h5, .book-text h6 { line-height: 1.2; margin-top: 1em; margin-bottom: 0.5em; }
+.book-setting-side { display: inline-block; width: 29%; margin: 2px 1px; vertical-align: middle; }
+.book-setting-type { display: inline-block; width: 36% !important; margin: 2px 1px !important; padding: 7px 2px !important; font-size: 13px !important; text-align: center; vertical-align: middle; }
+.book-page-viewport { position: relative; display: block; width: 100%; margin: 0; padding: 0; overflow: hidden; background: #fff; }
+.book-text { position: relative; box-sizing: border-box; margin: 0; padding: 8px 0 6px 0; color: #000; background: #fff; text-align: left; word-wrap: break-word; overflow-wrap: break-word; -webkit-column-fill: auto; column-fill: auto; }
+.book-text p { margin-top: 0.65em; margin-bottom: 0.65em; }
+.book-text h1, .book-text h2, .book-text h3, .book-text h4, .book-text h5, .book-text h6 { line-height: 1.2; margin-top: 0.8em; margin-bottom: 0.45em; }
 .book-text blockquote { margin-left: 1.2em; margin-right: 0.5em; }
 .book-text pre, .book-text code { white-space: pre-wrap; word-wrap: break-word; }
-.book-reading-title { border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 14px; font-family: Georgia, serif; font-weight: bold; font-size: 0.9em; }
+.book-text ul, .book-text ol { padding-left: 1.4em; }
+.book-text img { display: block; max-width: 100%; width: auto; height: auto; margin: 0.45em auto; -webkit-column-break-inside: avoid; break-inside: avoid; }
+.book-text figure { margin: 0.45em 0; padding: 0; -webkit-column-break-inside: avoid; break-inside: avoid; }
+.book-text figcaption { font-size: 0.82em; line-height: 1.25; text-align: center; }
+.book-reading-title { border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px; font-family: Georgia, serif; font-weight: bold; font-size: 0.9em; -webkit-column-break-after: avoid; break-after: avoid; }
+

@@ -59,6 +59,9 @@
         currentBook: null,
         currentBookSection: null,
         bookSectionIndex: 0,
+        bookPageIndex: 0,
+        bookPageCount: 1,
+        bookLayoutTimer: null,
         bookSettingsOpen: false,
         bookFontSize: 22,
         bookLineHeight: 155,
@@ -110,6 +113,8 @@
         if (document.body.className === "book-reader-active") {
             forceSaveBookProgress();
             window.onscroll = null;
+            window.onresize = null;
+            if (state.bookLayoutTimer) { window.clearTimeout(state.bookLayoutTimer); state.bookLayoutTimer = null; }
             if (state.bookProgressSaveTimer) {
                 window.clearTimeout(state.bookProgressSaveTimer);
                 state.bookProgressSaveTimer = null;
@@ -2207,24 +2212,17 @@
     }
 
     function bookScrollRatio() {
-        var doc = document.documentElement;
-        var body = document.body;
-        var top = typeof window.pageYOffset === "number" ? window.pageYOffset : (doc.scrollTop || body.scrollTop || 0);
-        var height = Math.max(doc.scrollHeight || 0, body.scrollHeight || 0) - (window.innerHeight || doc.clientHeight || 0);
-        if (height <= 0) return 0;
-        return Math.max(0, Math.min(10000, Math.round((top / height) * 10000)));
+        if (state.bookPageCount <= 1) return 0;
+        return Math.max(0, Math.min(10000, Math.round((state.bookPageIndex / (state.bookPageCount - 1)) * 10000)));
     }
 
     function bookScrollToRatio(ratio) {
+        var page;
         ratio = parseInt(ratio, 10);
         if (isNaN(ratio) || ratio < 0) ratio = 0;
         if (ratio > 10000) ratio = 10000;
-        window.setTimeout(function () {
-            var doc = document.documentElement;
-            var body = document.body;
-            var height = Math.max(doc.scrollHeight || 0, body.scrollHeight || 0) - (window.innerHeight || doc.clientHeight || 0);
-            window.scrollTo(0, height > 0 ? Math.round(height * ratio / 10000) : 0);
-        }, 180);
+        page = state.bookPageCount > 1 ? Math.round((ratio / 10000) * (state.bookPageCount - 1)) : 0;
+        showBookPage(page, false);
     }
 
     function bookProgressPayload() {
@@ -2271,10 +2269,6 @@
         }
         if (!state.authUser || !state.currentBook) { if (done) done(); return; }
         sendBookProgress(done);
-    }
-
-    function bookScrollHandler() {
-        scheduleBookProgressSave();
     }
 
     function renderBooksPager(id, page, pages) {
@@ -2390,42 +2384,58 @@
         var fontLabel = state.bookFont === "sans" ? "Sans" : (state.bookFont === "mono" ? "Mono" : "Serif");
         if (!state.bookSettingsOpen) return "";
         return '<div class="book-settings">' +
-            '<div class="book-setting-row"><button id="bookFontMinus" class="btn" type="button">A-</button><span class="book-setting-label">Font ' + state.bookFontSize + 'px</span><button id="bookFontPlus" class="btn" type="button">A+</button></div>' +
-            '<div class="book-setting-row"><button id="bookMarginMinus" class="btn" type="button">Margin -</button><span class="book-setting-label">' + state.bookMargin + 'px</span><button id="bookMarginPlus" class="btn" type="button">Margin +</button></div>' +
-            '<div class="book-setting-row"><button id="bookLineMinus" class="btn" type="button">Line -</button><span class="book-setting-label">' + (state.bookLineHeight / 100).toFixed(2) + '</span><button id="bookLinePlus" class="btn" type="button">Line +</button></div>' +
-            '<div class="book-setting-row"><button id="bookFontType" class="btn btn-wide" type="button">Typeface: ' + fontLabel + '</button></div></div>';
+            '<div class="book-setting-row"><button id="bookFontMinus" class="btn book-setting-button" type="button">A-</button><span class="book-setting-label">Font ' + state.bookFontSize + 'px</span><button id="bookFontPlus" class="btn book-setting-button" type="button">A+</button></div>' +
+            '<div class="book-setting-row"><button id="bookMarginMinus" class="btn book-setting-button" type="button">Margin -</button><span class="book-setting-label">' + state.bookMargin + 'px</span><button id="bookMarginPlus" class="btn book-setting-button" type="button">Margin +</button></div>' +
+            '<div class="book-setting-row"><button id="bookLineMinus" class="btn book-setting-button" type="button">Line -</button><span class="book-setting-label">' + (state.bookLineHeight / 100).toFixed(2) + '</span><button id="bookLinePlus" class="btn book-setting-button" type="button">Line +</button></div>' +
+            '<div class="book-setting-row book-typeface-row"><span class="book-setting-side"></span><button id="bookFontType" class="btn book-setting-type" type="button">Typeface: ' + fontLabel + '</button><span class="book-setting-side"></span></div></div>';
     }
 
     function renderBookReader(section, restoreRatio) {
         var book = state.currentBook;
         var index = parseInt(section.index, 10) || 0;
-        var count = parseInt(book.sectionCount, 10) || 1;
         var html = '<div class="book-reader">' +
             '<div id="bookControlShell" class="book-control-shell"><div class="book-reader-row">' +
             '<button id="bookBack" class="btn book-reader-btn" type="button">Books</button>' +
-            '<button id="bookPrev" class="btn book-reader-btn" type="button"' + (index <= 0 ? ' disabled="disabled"' : '') + '>Prev</button>' +
-            '<span class="book-section-count">' + (index + 1) + '/' + count + '</span>' +
-            '<button id="bookNext" class="btn book-reader-btn" type="button"' + (index >= count - 1 ? ' disabled="disabled"' : '') + '>Next</button>' +
+            '<button id="bookPrev" class="btn book-reader-btn" type="button">Prev</button>' +
+            '<span id="bookPageCount" class="book-section-count">1/1</span>' +
+            '<button id="bookNext" class="btn book-reader-btn" type="button">Next</button>' +
             '<button id="bookAa" class="btn book-reader-btn" type="button">Aa</button>' +
             '</div>' + bookSettingsHtml() + '</div><div id="bookControlSpacer" class="book-control-spacer"></div>' +
-            '<div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div>';
+            '<div id="bookPageViewport" class="book-page-viewport"><div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div></div>';
         document.body.className = "book-reader-active";
         el("view").innerHTML = html;
         state.currentBookSection = section;
         state.bookSectionIndex = index;
+        state.bookPageIndex = 0;
+        state.bookPageCount = 1;
         applyBookTextStyle();
         bindBookReaderControls();
-        sizeBookControlSpacer();
-        window.onscroll = bookScrollHandler;
-        bookScrollToRatio(restoreRatio || 0);
-        setStatus("Reading " + (book.title || "book") + " - section " + (index + 1) + "/" + count + ".", false);
+        bindBookImages();
+        layoutBookPages(restoreRatio || 0);
+        window.onscroll = null;
+        window.onresize = function () {
+            if (document.body.className === "book-reader-active") scheduleBookLayout();
+        };
+        setStatus("Reading " + (book.title || "book") + " - section " + (index + 1) + "/" + (parseInt(book.sectionCount, 10) || 1) + ".", false);
     }
 
-    function sizeBookControlSpacer() {
-        window.setTimeout(function () {
-            var shell = el("bookControlShell"), spacer = el("bookControlSpacer");
-            if (shell && spacer) spacer.style.height = (shell.offsetHeight || 58) + "px";
-        }, 0);
+    function bindBookImages() {
+        var root = el("bookText"), images, i;
+        if (!root || !root.getElementsByTagName) return;
+        images = root.getElementsByTagName("img");
+        for (i = 0; i < images.length; i += 1) {
+            images[i].onload = function () { scheduleBookLayout(); };
+            images[i].onerror = function () { this.style.display = "none"; scheduleBookLayout(); };
+        }
+    }
+
+    function scheduleBookLayout() {
+        if (state.bookLayoutTimer) window.clearTimeout(state.bookLayoutTimer);
+        state.bookLayoutTimer = window.setTimeout(function () {
+            var ratio = bookScrollRatio();
+            state.bookLayoutTimer = null;
+            layoutBookPages(ratio);
+        }, 80);
     }
 
     function applyBookTextStyle() {
@@ -2433,14 +2443,99 @@
         if (!node) return;
         node.style.fontSize = state.bookFontSize + "px";
         node.style.lineHeight = String(state.bookLineHeight / 100);
-        node.style.paddingLeft = state.bookMargin + "px";
-        node.style.paddingRight = state.bookMargin + "px";
         node.style.fontFamily = bookFontFamily();
+    }
+
+    function layoutBookPages(restoreRatio) {
+        var shell = el("bookControlShell"), spacer = el("bookControlSpacer"), viewport = el("bookPageViewport"), flow = el("bookText");
+        var doc = document.documentElement, shellHeight, viewportWidth, viewportHeight, margin, contentWidth, gap, scrollWidth, count, images, i;
+        if (!shell || !spacer || !viewport || !flow) return;
+        shellHeight = shell.offsetHeight || 58;
+        viewportWidth = window.innerWidth || doc.clientWidth || 600;
+        viewportHeight = (window.innerHeight || doc.clientHeight || 800) - shellHeight;
+        if (viewportHeight < 180) viewportHeight = 180;
+        margin = Math.max(0, Math.min(state.bookMargin, Math.floor((viewportWidth - 120) / 2)));
+        contentWidth = Math.max(120, viewportWidth - (margin * 2));
+        gap = margin * 2;
+
+        spacer.style.height = shellHeight + "px";
+        viewport.style.width = viewportWidth + "px";
+        viewport.style.height = viewportHeight + "px";
+        flow.style.position = "relative";
+        flow.style.left = "0px";
+        flow.style.width = contentWidth + "px";
+        flow.style.height = viewportHeight + "px";
+        flow.style.marginLeft = margin + "px";
+        flow.style.marginRight = "0px";
+        flow.style.paddingLeft = "0px";
+        flow.style.paddingRight = "0px";
+        flow.style.webkitColumnWidth = contentWidth + "px";
+        flow.style.columnWidth = contentWidth + "px";
+        flow.style.webkitColumnGap = gap + "px";
+        flow.style.columnGap = gap + "px";
+        flow.style.webkitColumnFill = "auto";
+        flow.style.columnFill = "auto";
+        applyBookTextStyle();
+
+        images = flow.getElementsByTagName ? flow.getElementsByTagName("img") : [];
+        for (i = 0; i < images.length; i += 1) {
+            images[i].style.maxWidth = contentWidth + "px";
+            images[i].style.maxHeight = Math.max(100, viewportHeight - 28) + "px";
+            images[i].style.width = "auto";
+            images[i].style.height = "auto";
+        }
+
+        scrollWidth = flow.scrollWidth || contentWidth;
+        count = Math.max(1, Math.ceil((scrollWidth + margin) / viewportWidth));
+        state.bookPageCount = count;
+        bookScrollToRatio(typeof restoreRatio === "number" ? restoreRatio : 0);
+    }
+
+    function updateBookPageControls() {
+        var label = el("bookPageCount"), prev = el("bookPrev"), next = el("bookNext");
+        var sectionCount = state.currentBook ? parseInt(state.currentBook.sectionCount, 10) || 1 : 1;
+        if (label) label.innerHTML = (state.bookPageIndex + 1) + "/" + state.bookPageCount;
+        if (prev) prev.disabled = state.bookSectionIndex <= 0 && state.bookPageIndex <= 0;
+        if (next) next.disabled = state.bookSectionIndex >= sectionCount - 1 && state.bookPageIndex >= state.bookPageCount - 1;
+    }
+
+    function showBookPage(pageIndex, saveProgress) {
+        var viewport = el("bookPageViewport"), flow = el("bookText"), doc = document.documentElement, pageWidth;
+        if (!viewport || !flow) return;
+        pageIndex = parseInt(pageIndex, 10);
+        if (isNaN(pageIndex) || pageIndex < 0) pageIndex = 0;
+        if (pageIndex >= state.bookPageCount) pageIndex = state.bookPageCount - 1;
+        state.bookPageIndex = pageIndex;
+        pageWidth = viewport.clientWidth || window.innerWidth || doc.clientWidth || 600;
+        flow.style.left = (-pageIndex * pageWidth) + "px";
+        updateBookPageControls();
+        if (saveProgress) scheduleBookProgressSave();
+    }
+
+    function nextBookPage() {
+        var sectionCount = state.currentBook ? parseInt(state.currentBook.sectionCount, 10) || 1 : 1;
+        if (state.bookPageIndex < state.bookPageCount - 1) {
+            showBookPage(state.bookPageIndex + 1, true);
+            return;
+        }
+        if (state.bookSectionIndex < sectionCount - 1) {
+            forceSaveBookProgress(function () { loadBookSection(state.bookSectionIndex + 1, 0); });
+        }
+    }
+
+    function previousBookPage() {
+        if (state.bookPageIndex > 0) {
+            showBookPage(state.bookPageIndex - 1, true);
+            return;
+        }
+        if (state.bookSectionIndex > 0) {
+            forceSaveBookProgress(function () { loadBookSection(state.bookSectionIndex - 1, 10000); });
+        }
     }
 
     function changeBookSetting(kind, delta) {
         if (kind === "font") state.bookFontSize = Math.max(14, Math.min(38, state.bookFontSize + delta));
-        if (kind === "margin") state.bookMargin = Math.max(0, Math.min(60, state.bookMargin + delta));
+        if (kind === "margin") state.bookMargin = Math.max(0, Math.min(80, state.bookMargin + delta));
         if (kind === "line") state.bookLineHeight = Math.max(110, Math.min(220, state.bookLineHeight + delta));
         saveReaderSettings();
         rerenderBookControlsKeepPosition();
@@ -2460,11 +2555,9 @@
     }
 
     function bindBookReaderControls() {
-        var index = state.bookSectionIndex;
-        var count = state.currentBook ? parseInt(state.currentBook.sectionCount, 10) || 1 : 1;
         el("bookBack").onclick = function () { showBooks(state.booksPage || 1, ""); };
-        if (index > 0) el("bookPrev").onclick = function () { changeBookSection(index - 1); };
-        if (index < count - 1) el("bookNext").onclick = function () { changeBookSection(index + 1); };
+        el("bookPrev").onclick = previousBookPage;
+        el("bookNext").onclick = nextBookPage;
         el("bookAa").onclick = function () { state.bookSettingsOpen = !state.bookSettingsOpen; rerenderBookControlsKeepPosition(); };
         if (state.bookSettingsOpen) {
             el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
@@ -2477,10 +2570,6 @@
         }
     }
 
-    function changeBookSection(index) {
-        forceSaveBookProgress(function () { loadBookSection(index, 0); });
-    }
-
     function loadBookSection(index, restoreRatio) {
         var book = state.currentBook;
         if (!book) return;
@@ -2488,7 +2577,10 @@
         if (isNaN(index) || index < 0) index = 0;
         if (index >= book.sectionCount) index = book.sectionCount - 1;
         state.bookSectionIndex = index;
+        state.bookPageIndex = 0;
+        state.bookPageCount = 1;
         window.onscroll = null;
+        window.onresize = null;
         el("view").innerHTML = '<div class="notice">Loading book section...</div>';
         window.scrollTo(0, 0);
         xhrGet("/api/books/" + encodeURIComponent(book.id) + "/section/" + index, function (err, json) {
@@ -2531,7 +2623,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v23.1 started. Google Drive EPUB/AZW3 text reader + manga reader. Testing API...", false);
+        setStatus("ES5 v24 started. paged EPUB/AZW3 reader with inline images + manga reader. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

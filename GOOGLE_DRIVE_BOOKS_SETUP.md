@@ -62,19 +62,19 @@ BOOK_MAX_FILE_MB=80
 npm install
 ```
 
-The project uses server-side parsers for EPUB and Kindle KF8/AZW3. Ebook HTML is sanitized on the server and only the current text section is sent to the Kindle.
+The project uses server-side parsers for EPUB and Kindle KF8/AZW3. Ebook HTML is sanitized on the server. The current section is sent to Kindle with safe backend URLs for inline book images; those images are normalized to Kindle-friendly JPEG by the server.
 
 ## 5. Open Books
 
 Restart/deploy the app and open:
 
 ```text
-/kindle?t=231
+/kindle?t=24
 ```
 
 Tap **Books** in the top navigation.
 
-The folder is paged at 40 files per page. Reading position is synced to Neon when logged in.
+The folder is paged at 40 files per page. Inside a book, each section is reflowed into screen-sized pages based on the current font size, typeface, line spacing, viewport size and left/right margin. Reading position is synced to Neon when logged in.
 
 ## Kindle storage behavior
 
@@ -95,7 +95,7 @@ Growing data stays off the Kindle:
 
 The service-account credentials and Google Drive access token are server-only.
 
-## Render / Node ESM note (v23.1)
+## Render / Node ESM note (v24)
 
 The ebook parser packages publish separate Node ESM and CommonJS entry points. The server is built as ESM (`dist/server.mjs`) so Node selects the working `import` entry point. The parser modules are also lazy-loaded only when an EPUB/AZW3 is opened, so a parser problem cannot crash the whole manga server during startup.
 
@@ -106,4 +106,4 @@ Build Command: npm install && npm run build
 Start Command: npm start
 ```
 
-Do not override the Start Command with `node dist/server.cjs`; v23.1 starts `dist/server.mjs`.
+Do not override the Start Command with `node dist/server.cjs`; v24 starts `dist/server.mjs`.
