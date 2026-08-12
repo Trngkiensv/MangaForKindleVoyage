@@ -108,8 +108,18 @@ Start Command: npm start
 
 Do not override the Start Command with `node dist/server.cjs`; v24 starts `dist/server.mjs`.
 
-## v28: Kindle long-press text selection and translate
+## v29: Kindle tap-word translation mode
 
-On Kindle, press and hold a word for about half a second, then drag across the text to extend the selection. The Voyage reader uses a custom old-WebKit Range selection path instead of relying on the browser's native touch-selection UI. Releasing your finger sends only the selected text to the server, which calls the configured Cloudflare Workers AI model with a short Vietnamese-translation prompt. The result appears in a dismissible popup. This translation endpoint does not require an app login and does not apply the previous app-level translation rate limit. Selected text and translations are not stored in localStorage or Neon.
+Kindle Voyage no longer depends on native text selection, long-press, drag handles, `Selection`, or `Range` APIs. In the book reader, use the right-side **DICH** rail:
+
+1. Tap **DICH OFF** to switch it to **DICH ON**.
+2. Tap the first word you want.
+3. Tap the last word. The app highlights every word between them.
+4. Tap **Translate** in the small translation bar.
+5. Tap **Clear** to reset the range, or tap the popup X / outside the popup to dismiss the translation.
+
+When DICH is OFF, tapping the book page still advances to the next page. When DICH is ON, page taps are reserved for word selection; use the normal Prev/Next controls or side PREV PAGE rail to navigate.
+
+To keep Kindle memory bounded, only the currently loaded book section is tokenized into lightweight word spans, and only while translation mode is enabled. The whole ebook is never converted into word-span DOM. Translation remains public (no app login) and has no app-level rate limit. Cloudflare's own model/context/quota limits still apply. Selected text and translations are not stored in localStorage or Neon.
 
 Book typography preferences (font size, line spacing, side margin, lines/page, and typeface) remain stored only in the Kindle browser's small reader-settings localStorage object.

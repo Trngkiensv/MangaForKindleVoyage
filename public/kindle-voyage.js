@@ -75,14 +75,10 @@
         bookSelectionRequestSerial: 0,
         bookSelectionLastText: "",
         bookSelectionHandledAt: 0,
-        bookTouchSelectTimer: null,
-        bookTouchSelecting: false,
-        bookTouchAnchorPoint: null,
-        bookTouchWordEndPoint: null,
-        bookTouchStartX: 0,
-        bookTouchStartY: 0,
-        bookTouchMoved: false,
-        bookTouchSuppressClickUntil: 0,
+        bookTranslateMode: false,
+        bookWordAnchor: -1,
+        bookWordEnd: -1,
+        bookWordCount: 0,
         loading: false
     };
 
@@ -136,13 +132,10 @@
                 window.clearTimeout(state.bookSelectionTimer);
                 state.bookSelectionTimer = null;
             }
-            if (state.bookTouchSelectTimer) {
-                window.clearTimeout(state.bookTouchSelectTimer);
-                state.bookTouchSelectTimer = null;
-            }
-            state.bookTouchSelecting = false;
-            state.bookTouchAnchorPoint = null;
-            state.bookTouchWordEndPoint = null;
+            state.bookTranslateMode = false;
+            state.bookWordAnchor = -1;
+            state.bookWordEnd = -1;
+            state.bookWordCount = 0;
             closeBookTranslationPopup(true);
         }
         // A page turn is debounced to keep the Voyage responsive, but leaving
@@ -2431,15 +2424,22 @@
             '<button id="bookAa" class="btn book-reader-btn" type="button">Aa</button>' +
             '</div>' + bookSettingsHtml() + '</div><div id="bookControlSpacer" class="book-control-spacer"></div>' +
             '<div id="bookSideRail" class="book-side-rail"><button id="bookPrevSide" class="book-side-prev" type="button"><span>PREV<br>PAGE</span></button></div>' +
-            '<div id="bookPageViewport" class="book-page-viewport"><div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div></div>';
+            '<div id="bookTranslateRail" class="book-translate-rail"><button id="bookTranslateMode" class="book-translate-mode" type="button">DICH<br>OFF</button></div>' +
+            '<div id="bookPageViewport" class="book-page-viewport' + (state.bookTranslateMode ? ' book-translate-active' : '') + '"><div id="bookText" class="book-text"><div class="book-reading-title">' + escapeHtml(section.title || book.title) + '</div>' + section.html + '</div></div>' +
+            '<div id="bookTranslateBar" class="book-translate-bar"><button id="bookTranslateClear" class="btn book-translate-action" type="button">Clear</button><span id="bookTranslateLabel" class="book-translate-label">Select words</span><button id="bookTranslateGo" class="btn btn-dark book-translate-action" type="button" disabled="disabled">Translate</button></div></div>';
         document.body.className = "book-reader-active";
         el("view").innerHTML = html;
         state.currentBookSection = section;
         state.bookSectionIndex = index;
         state.bookPageIndex = 0;
         state.bookPageCount = 1;
+        state.bookWordAnchor = -1;
+        state.bookWordEnd = -1;
+        state.bookWordCount = 0;
+        if (state.bookTranslateMode) wrapBookWords();
         applyBookTextStyle();
         bindBookReaderControls();
+        updateBookTranslateControls();
         bindBookImages();
         layoutBookPages(restoreRatio || 0);
         window.onscroll = null;
@@ -2553,8 +2553,8 @@
     }
 
     function layoutBookPages(restoreRatio) {
-        var shell = el("bookControlShell"), spacer = el("bookControlSpacer"), viewport = el("bookPageViewport"), flow = el("bookText"), rail = el("bookSideRail"), prevSide = el("bookPrevSide");
-        var doc = document.documentElement, rows, toolbarHeight, screenWidth, viewportWidth, viewportHeight, railWidth, margin, contentWidth, gap;
+        var shell = el("bookControlShell"), spacer = el("bookControlSpacer"), viewport = el("bookPageViewport"), flow = el("bookText"), rail = el("bookSideRail"), prevSide = el("bookPrevSide"), translateRail = el("bookTranslateRail"), translateMode = el("bookTranslateMode");
+        var doc = document.documentElement, rows, toolbarHeight, screenWidth, viewportWidth, viewportHeight, railWidth, translateRailWidth, margin, contentWidth, gap;
         var linePx, maxLines, pageLines, pageHeight, scrollWidth, count, images, i;
         if (!shell || !spacer || !viewport || !flow) return;
 
@@ -2568,7 +2568,8 @@
         toolbarHeight = rows && rows.length ? (rows[0].offsetHeight || 48) + 8 : 58;
         screenWidth = window.innerWidth || doc.clientWidth || 600;
         railWidth = 58;
-        viewportWidth = Math.max(140, screenWidth - railWidth);
+        translateRailWidth = 54;
+        viewportWidth = Math.max(140, screenWidth - railWidth - translateRailWidth);
         viewportHeight = (window.innerHeight || doc.clientHeight || 800) - toolbarHeight;
         if (viewportHeight < 180) viewportHeight = 180;
 
@@ -2580,6 +2581,15 @@
             rail.style.height = viewportHeight + "px";
             rail.style.zIndex = "998";
         }
+        if (translateRail) {
+            translateRail.style.position = "fixed";
+            translateRail.style.right = "0px";
+            translateRail.style.top = toolbarHeight + "px";
+            translateRail.style.width = translateRailWidth + "px";
+            translateRail.style.height = viewportHeight + "px";
+            translateRail.style.zIndex = "998";
+        }
+        if (translateMode) translateMode.style.height = viewportHeight + "px";
 
         margin = Math.max(0, Math.min(state.bookMargin, Math.floor((viewportWidth - 120) / 2)));
         contentWidth = Math.max(120, viewportWidth - (margin * 2));
@@ -2603,6 +2613,8 @@
          */
         if (rail) rail.style.height = pageHeight + "px";
         if (prevSide) prevSide.style.height = pageHeight + "px";
+        if (translateRail) translateRail.style.height = pageHeight + "px";
+        if (translateMode) translateMode.style.height = pageHeight + "px";
         spacer.style.height = toolbarHeight + "px";
         viewport.style.marginLeft = railWidth + "px";
         viewport.style.width = viewportWidth + "px";
@@ -2648,6 +2660,7 @@
         pageIndex = parseInt(pageIndex, 10);
         if (isNaN(pageIndex) || pageIndex < 0) pageIndex = 0;
         if (pageIndex >= state.bookPageCount) pageIndex = state.bookPageCount - 1;
+        if (pageIndex !== state.bookPageIndex) clearBookWordSelection();
         state.bookPageIndex = pageIndex;
         pageWidth = viewport.clientWidth || window.innerWidth || doc.clientWidth || 600;
         flow.style.left = (-pageIndex * pageWidth) + "px";
@@ -2698,21 +2711,157 @@
         renderBookReader(section, ratio);
     }
 
-    function currentBookSelectionText() {
-        var selection, value;
-        try {
-            if (!window.getSelection) return "";
-            selection = window.getSelection();
-            value = selection ? trim(selection.toString()) : "";
-        } catch (e) {
-            value = "";
-        }
-        if (!value) return "";
-        value = value.replace(/\s+/g, " ");
-        return value;
+    function bookHasClass(node, className) {
+        return !!(node && (" " + (node.className || "") + " ").indexOf(" " + className + " ") >= 0);
     }
 
-    function clearBookTextSelection() {
+    function bookWordNodeFromTarget(node) {
+        var root = el("bookText");
+        while (node && node !== root) {
+            if (bookHasClass(node, "book-word")) return node;
+            node = node.parentNode;
+        }
+        return null;
+    }
+
+    function bookShouldSkipWordWrap(node) {
+        var parent = node ? node.parentNode : null;
+        var tag;
+        while (parent && parent !== el("bookText")) {
+            tag = parent.tagName ? String(parent.tagName).toLowerCase() : "";
+            if (tag === "script" || tag === "style" || tag === "button") return true;
+            parent = parent.parentNode;
+        }
+        return false;
+    }
+
+    function collectBookTextNodes(node, out) {
+        var child, next;
+        if (!node) return;
+        child = node.firstChild;
+        while (child) {
+            next = child.nextSibling;
+            if (child.nodeType === 3) {
+                if (!bookShouldSkipWordWrap(child) && /\S/.test(child.nodeValue || "")) out.push(child);
+            } else if (child.nodeType === 1) {
+                collectBookTextNodes(child, out);
+            }
+            child = next;
+        }
+    }
+
+    function wrapBookWords() {
+        var root = el("bookText"), nodes = [], i, node, value, match, regex, frag, span, index = 0;
+        if (!root || !state.bookTranslateMode) return;
+        collectBookTextNodes(root, nodes);
+        for (i = 0; i < nodes.length; i += 1) {
+            node = nodes[i];
+            value = node.nodeValue || "";
+            regex = /\s+|\S+/g;
+            frag = document.createDocumentFragment();
+            while ((match = regex.exec(value)) !== null) {
+                if (/^\s+$/.test(match[0])) {
+                    frag.appendChild(document.createTextNode(match[0]));
+                } else {
+                    span = document.createElement("span");
+                    span.className = "book-word";
+                    span.id = "bookWord" + index;
+                    span.setAttribute("data-word-index", String(index));
+                    span.appendChild(document.createTextNode(match[0]));
+                    frag.appendChild(span);
+                    index += 1;
+                }
+            }
+            if (node.parentNode) node.parentNode.replaceChild(frag, node);
+        }
+        state.bookWordCount = index;
+    }
+
+    function clearBookWordSelection() {
+        var start, end, i, node;
+        start = state.bookWordAnchor;
+        end = state.bookWordEnd;
+        if (start >= 0 && end >= 0) {
+            if (start > end) { i = start; start = end; end = i; }
+            for (i = start; i <= end; i += 1) {
+                node = el("bookWord" + i);
+                if (node) node.className = "book-word";
+            }
+        }
+        state.bookWordAnchor = -1;
+        state.bookWordEnd = -1;
+        updateBookTranslateControls();
+    }
+
+    function highlightBookWordSelection() {
+        var start = state.bookWordAnchor, end = state.bookWordEnd, i, node, all, j;
+        if (start < 0 || end < 0) return;
+        all = el("bookText") ? el("bookText").getElementsByTagName("span") : [];
+        for (j = 0; j < all.length; j += 1) {
+            if (bookHasClass(all[j], "book-word-selected")) all[j].className = "book-word";
+        }
+        if (start > end) { i = start; start = end; end = i; }
+        for (i = start; i <= end; i += 1) {
+            node = el("bookWord" + i);
+            if (node) node.className = "book-word book-word-selected";
+        }
+        updateBookTranslateControls();
+    }
+
+    function selectedBookWordText() {
+        var start = state.bookWordAnchor, end = state.bookWordEnd, i, node, words = [];
+        if (start < 0 || end < 0) return "";
+        if (start > end) { i = start; start = end; end = i; }
+        for (i = start; i <= end; i += 1) {
+            node = el("bookWord" + i);
+            if (node) words.push(trim(node.textContent || node.innerText || ""));
+        }
+        return trim(words.join(" ").replace(/\s+/g, " "));
+    }
+
+    function selectedBookWordCount() {
+        if (state.bookWordAnchor < 0 || state.bookWordEnd < 0) return 0;
+        return Math.abs(state.bookWordEnd - state.bookWordAnchor) + 1;
+    }
+
+    function updateBookTranslateControls() {
+        var mode = el("bookTranslateMode"), bar = el("bookTranslateBar"), label = el("bookTranslateLabel"), go = el("bookTranslateGo"), clear = el("bookTranslateClear");
+        var count = selectedBookWordCount();
+        if (mode) {
+            mode.innerHTML = state.bookTranslateMode ? "DICH<br>ON" : "DICH<br>OFF";
+            mode.className = state.bookTranslateMode ? "book-translate-mode book-translate-mode-on" : "book-translate-mode";
+        }
+        if (bar) bar.style.display = state.bookTranslateMode ? "block" : "none";
+        if (label) label.innerHTML = count ? (count + (count === 1 ? " word" : " words")) : "Tap first word";
+        if (go) go.disabled = count < 1;
+        if (clear) clear.disabled = count < 1;
+    }
+
+    function selectBookWordNode(node) {
+        var index;
+        if (!node) return;
+        index = parseInt(node.getAttribute("data-word-index"), 10);
+        if (isNaN(index)) return;
+        if (state.bookWordAnchor < 0) {
+            state.bookWordAnchor = index;
+            state.bookWordEnd = index;
+        } else {
+            state.bookWordEnd = index;
+        }
+        highlightBookWordSelection();
+    }
+
+    function toggleBookTranslateMode() {
+        var ratio = bookScrollRatio();
+        closeBookTranslationPopup(false);
+        state.bookTranslateMode = !state.bookTranslateMode;
+        state.bookWordAnchor = -1;
+        state.bookWordEnd = -1;
+        state.bookWordCount = 0;
+        if (state.currentBookSection) renderBookReader(state.currentBookSection, ratio);
+    }
+
+    function clearNativeBookTextSelection() {
         var selection;
         try {
             if (!window.getSelection) return;
@@ -2726,7 +2875,8 @@
         var overlay = el("bookTranslationOverlay");
         if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
         state.bookSelectionRequestSerial += 1;
-        if (clearSelection) clearBookTextSelection();
+        clearNativeBookTextSelection();
+        if (clearSelection) clearBookWordSelection();
     }
 
     function renderBookTranslationPopup(sourceText, translatedText, errorTextValue, loading) {
@@ -2782,267 +2932,52 @@
         });
     }
 
-    function scheduleSelectedBookTranslation() {
-        if (state.bookSelectionTimer) window.clearTimeout(state.bookSelectionTimer);
-        state.bookSelectionTimer = window.setTimeout(function () {
-            var selected;
-            state.bookSelectionTimer = null;
-            if (document.body.className !== "book-reader-active") return;
-            selected = currentBookSelectionText();
-            if (selected) translateSelectedBookText(selected);
-        }, 180);
-    }
-
-    function bookNodeInsideText(node) {
-        var root = el("bookText");
-        while (node) {
-            if (node === root) return true;
-            node = node.parentNode;
-        }
-        return false;
-    }
-
-    function bookCaretPointFromClient(clientX, clientY) {
-        var range, pos, hit, node, rect, value, offset;
-        try {
-            if (document.caretRangeFromPoint) {
-                range = document.caretRangeFromPoint(clientX, clientY);
-                if (range && bookNodeInsideText(range.startContainer)) {
-                    return { node: range.startContainer, offset: range.startOffset };
-                }
-            }
-        } catch (e1) {}
-        try {
-            if (document.caretPositionFromPoint) {
-                pos = document.caretPositionFromPoint(clientX, clientY);
-                if (pos && bookNodeInsideText(pos.offsetNode)) {
-                    return { node: pos.offsetNode, offset: pos.offset };
-                }
-            }
-        } catch (e2) {}
-
-        /*
-         * Very old Kindle WebKit normally exposes caretRangeFromPoint. Keep a
-         * coarse fallback so long-press still selects something if that API is
-         * missing on a particular firmware build.
-         */
-        try {
-            hit = document.elementFromPoint ? document.elementFromPoint(clientX, clientY) : null;
-            if (!hit || !bookNodeInsideText(hit)) return null;
-            node = hit.firstChild;
-            while (node && node.nodeType !== 3) node = node.nextSibling;
-            if (!node || !node.nodeValue) return null;
-            value = node.nodeValue;
-            rect = hit.getBoundingClientRect ? hit.getBoundingClientRect() : null;
-            if (rect && rect.width > 0) {
-                offset = Math.round(((clientX - rect.left) / rect.width) * value.length);
-            } else {
-                offset = Math.floor(value.length / 2);
-            }
-            if (offset < 0) offset = 0;
-            if (offset > value.length) offset = value.length;
-            return { node: node, offset: offset };
-        } catch (e3) {}
-        return null;
-    }
-
-    function compareBookCaretPoints(a, b) {
-        var ra, rb;
-        if (!a || !b) return 0;
-        if (a.node === b.node) return a.offset === b.offset ? 0 : (a.offset < b.offset ? -1 : 1);
-        try {
-            ra = document.createRange();
-            rb = document.createRange();
-            ra.setStart(a.node, a.offset);
-            ra.collapse(true);
-            rb.setStart(b.node, b.offset);
-            rb.collapse(true);
-            return ra.compareBoundaryPoints(0, rb);
-        } catch (e) {}
-        return 0;
-    }
-
-    function setBookSelectionBetween(startPoint, endPoint) {
-        var range, selection, first = startPoint, last = endPoint;
-        if (!startPoint || !endPoint) return false;
-        try {
-            if (compareBookCaretPoints(first, last) > 0) {
-                first = endPoint;
-                last = startPoint;
-            }
-            range = document.createRange();
-            range.setStart(first.node, first.offset);
-            range.setEnd(last.node, last.offset);
-            selection = window.getSelection ? window.getSelection() : null;
-            if (!selection) return false;
-            if (selection.removeAllRanges) selection.removeAllRanges();
-            selection.addRange(range);
-            return true;
-        } catch (e) {}
-        return false;
-    }
-
-    function bookWordPointsFromCaret(point) {
-        var node, value, offset, start, end;
-        if (!point || !point.node || point.node.nodeType !== 3) return null;
-        node = point.node;
-        value = node.nodeValue || "";
-        if (!value) return null;
-        offset = point.offset;
-        if (offset >= value.length) offset = value.length - 1;
-        if (offset < 0) offset = 0;
-        if (/\s/.test(value.charAt(offset))) {
-            while (offset < value.length && /\s/.test(value.charAt(offset))) offset += 1;
-            if (offset >= value.length) {
-                offset = point.offset - 1;
-                while (offset >= 0 && /\s/.test(value.charAt(offset))) offset -= 1;
-            }
-        }
-        if (offset < 0 || offset >= value.length) return null;
-        start = offset;
-        end = offset + 1;
-        while (start > 0 && !/\s/.test(value.charAt(start - 1))) start -= 1;
-        while (end < value.length && !/\s/.test(value.charAt(end))) end += 1;
-        return {
-            start: { node: node, offset: start },
-            end: { node: node, offset: end }
-        };
-    }
-
-    function beginKindleBookSelection(clientX, clientY) {
-        var point = bookCaretPointFromClient(clientX, clientY);
-        var word = bookWordPointsFromCaret(point);
-        if (!word) return false;
-        state.bookTouchSelecting = true;
-        state.bookTouchAnchorPoint = word.start;
-        state.bookTouchWordEndPoint = word.end;
-        state.bookTouchSuppressClickUntil = new Date().getTime() + 1600;
-        setBookSelectionBetween(word.start, word.end);
-        return true;
-    }
-
-    function extendKindleBookSelection(clientX, clientY) {
-        var point, anchor, fixedEnd;
-        if (!state.bookTouchSelecting || !state.bookTouchAnchorPoint) return;
-        point = bookCaretPointFromClient(clientX, clientY);
-        if (!point) return;
-        anchor = state.bookTouchAnchorPoint;
-        fixedEnd = state.bookTouchWordEndPoint || anchor;
-        if (compareBookCaretPoints(point, anchor) < 0) {
-            setBookSelectionBetween(point, fixedEnd);
-        } else {
-            setBookSelectionBetween(anchor, point);
-        }
-    }
-
-    function cancelBookTouchSelectTimer() {
-        if (state.bookTouchSelectTimer) {
-            window.clearTimeout(state.bookTouchSelectTimer);
-            state.bookTouchSelectTimer = null;
-        }
-    }
-
-    function bindKindleBookTouchSelection(viewport) {
-        if (!viewport) return;
-        viewport.ontouchstart = function (evt) {
-            var touch;
-            evt = evt || window.event;
-            touch = evt.touches && evt.touches.length ? evt.touches[0] : null;
-            if (!touch) return true;
-            cancelBookTouchSelectTimer();
-            state.bookTouchSelecting = false;
-            state.bookTouchAnchorPoint = null;
-            state.bookTouchWordEndPoint = null;
-            state.bookTouchStartX = touch.clientX;
-            state.bookTouchStartY = touch.clientY;
-            state.bookTouchMoved = false;
-            /* Own Kindle touch handling so its old browser cannot turn a
-             * long-press into a page tap or swallow the drag selection. */
-            if (evt.preventDefault) evt.preventDefault();
-            evt.returnValue = false;
-            state.bookTouchSelectTimer = window.setTimeout(function () {
-                state.bookTouchSelectTimer = null;
-                beginKindleBookSelection(state.bookTouchStartX, state.bookTouchStartY);
-            }, 520);
-            return false;
-        };
-        viewport.ontouchmove = function (evt) {
-            var touch, dx, dy;
-            evt = evt || window.event;
-            touch = evt.touches && evt.touches.length ? evt.touches[0] : null;
-            if (!touch) return false;
-            if (evt.preventDefault) evt.preventDefault();
-            evt.returnValue = false;
-            if (state.bookTouchSelecting) {
-                extendKindleBookSelection(touch.clientX, touch.clientY);
-                return false;
-            }
-            dx = Math.abs(touch.clientX - state.bookTouchStartX);
-            dy = Math.abs(touch.clientY - state.bookTouchStartY);
-            if (dx > 14 || dy > 14) {
-                state.bookTouchMoved = true;
-                cancelBookTouchSelectTimer();
-            }
-            return false;
-        };
-        viewport.ontouchend = function (evt) {
-            var wasSelecting = state.bookTouchSelecting;
-            evt = evt || window.event;
-            cancelBookTouchSelectTimer();
-            if (evt.preventDefault) evt.preventDefault();
-            evt.returnValue = false;
-            state.bookTouchSelecting = false;
-            state.bookTouchAnchorPoint = null;
-            state.bookTouchWordEndPoint = null;
-            state.bookTouchSuppressClickUntil = new Date().getTime() + 900;
-            if (wasSelecting) {
-                scheduleSelectedBookTranslation();
-            } else if (!state.bookTouchMoved) {
-                nextBookPage();
-            }
-            return false;
-        };
-        viewport.ontouchcancel = function (evt) {
-            evt = evt || window.event;
-            cancelBookTouchSelectTimer();
-            state.bookTouchSelecting = false;
-            state.bookTouchAnchorPoint = null;
-            state.bookTouchWordEndPoint = null;
-            state.bookTouchMoved = false;
-            state.bookTouchSuppressClickUntil = new Date().getTime() + 500;
-            if (evt.preventDefault) evt.preventDefault();
-            return false;
-        };
-    }
-
     function bindBookReaderControls() {
-        var viewport = el("bookPageViewport");
+        var viewport = el("bookPageViewport"), translateMode = el("bookTranslateMode"), clearButton = el("bookTranslateClear"), goButton = el("bookTranslateGo");
         el("bookBack").onclick = function () { showBooks(state.booksPage || 1, ""); };
         el("bookPrev").onclick = previousBookPage;
         el("bookPrevSide").onclick = previousBookPage;
         el("bookNext").onclick = nextBookPage;
         el("bookAa").onclick = function () { state.bookSettingsOpen = !state.bookSettingsOpen; rerenderBookControlsKeepPosition(); };
+        if (translateMode) translateMode.onclick = function (evt) {
+            evt = evt || window.event;
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            toggleBookTranslateMode();
+            return false;
+        };
+        if (clearButton) clearButton.onclick = function (evt) {
+            evt = evt || window.event;
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            clearBookWordSelection();
+            return false;
+        };
+        if (goButton) goButton.onclick = function (evt) {
+            var selected;
+            evt = evt || window.event;
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            selected = selectedBookWordText();
+            if (selected) translateSelectedBookText(selected);
+            return false;
+        };
         if (viewport) {
             viewport.onclick = function (evt) {
-                var selected = currentBookSelectionText();
+                var target, word;
                 evt = evt || window.event;
-                if (new Date().getTime() < state.bookTouchSuppressClickUntil) {
+                if (state.bookTranslateMode) {
+                    target = evt.target || evt.srcElement;
+                    word = bookWordNodeFromTarget(target);
+                    if (word) selectBookWordNode(word);
                     if (evt.preventDefault) evt.preventDefault();
+                    evt.returnValue = false;
+                    evt.cancelBubble = true;
                     return false;
                 }
-                if (selected) {
-                    translateSelectedBookText(selected);
-                    if (evt.preventDefault) evt.preventDefault();
-                    return false;
-                }
-                if (new Date().getTime() - state.bookSelectionHandledAt < 700) return false;
                 nextBookPage();
                 return true;
             };
-            /* Desktop/modern browsers can keep their native mouse selection.
-             * Kindle touch uses a custom long-press + drag Range implementation. */
-            viewport.onmouseup = scheduleSelectedBookTranslation;
-            bindKindleBookTouchSelection(viewport);
         }
         if (state.bookSettingsOpen) {
             el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
@@ -3112,7 +3047,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v28 started. Kindle long-press selection + public text translate. Testing API...", false);
+        setStatus("ES5 v29 started. Tap-word translation mode + public text translate. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);
