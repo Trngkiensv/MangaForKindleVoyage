@@ -601,6 +601,25 @@ app.get('/api/translation/status', async (_req, res) => {
   res.json(await translationService.getStatus());
 });
 
+app.post('/api/translation/text', async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    if (!allowRate(`book-text-translate:${user.id}`, 30, 10 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many translation requests. Please wait a few minutes.' });
+    }
+    const selected = String(req.body?.text || '').trim();
+    if (!selected) return res.status(400).json({ error: 'Select some text first' });
+    if (selected.length > 3000) return res.status(400).json({ error: 'Selected text is too long (max 3000 characters)' });
+    const result = await translationService.translateSelectedText(selected);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error: any) {
+    console.error('Selected text translation error:', error);
+    return res.status(502).json({ error: error?.message || String(error) });
+  }
+});
+
 app.get('/api/translation/chapter/:id/page/:page', async (req, res) => {
   try {
     const provider = providerForRequest(req);

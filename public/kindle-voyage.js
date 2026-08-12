@@ -71,6 +71,10 @@
         bookProgressSaveTimer: null,
         bookProgressDirty: false,
         bookProgressDebounceMs: 2500,
+        bookSelectionTimer: null,
+        bookSelectionRequestSerial: 0,
+        bookSelectionLastText: "",
+        bookSelectionHandledAt: 0,
         loading: false
     };
 
@@ -120,6 +124,11 @@
                 window.clearTimeout(state.bookProgressSaveTimer);
                 state.bookProgressSaveTimer = null;
             }
+            if (state.bookSelectionTimer) {
+                window.clearTimeout(state.bookSelectionTimer);
+                state.bookSelectionTimer = null;
+            }
+            closeBookTranslationPopup(true);
         }
         // A page turn is debounced to keep the Voyage responsive, but leaving
         // the reader is a durability boundary: flush the newest page first.
@@ -2535,7 +2544,7 @@
         if (!shell || !spacer || !viewport || !flow) return;
 
         /*
-         * v26 pagination: the reader chooses how many text line-heights make one page.
+         * v27 pagination: the reader chooses how many text line-heights make one page.
          * The fixed Aa settings panel is ignored when measuring the reading area so
          * opening settings does not silently change page breaks. Images/headings
          * consume vertical space inside the same page, just like a physical page.
@@ -2556,7 +2565,6 @@
             rail.style.height = viewportHeight + "px";
             rail.style.zIndex = "998";
         }
-        if (prevSide) prevSide.style.height = viewportHeight + "px";
 
         margin = Math.max(0, Math.min(state.bookMargin, Math.floor((viewportWidth - 120) / 2)));
         contentWidth = Math.max(120, viewportWidth - (margin * 2));
@@ -2564,18 +2572,26 @@
         linePx = Math.max(1, state.bookFontSize * (state.bookLineHeight / 100));
         maxLines = Math.max(5, Math.min(40, Math.floor((viewportHeight - 14) / linePx)));
         pageLines = Math.max(5, Math.min(state.bookLinesPerPage, maxLines));
-        if (pageLines !== state.bookLinesPerPage) {
-            state.bookLinesPerPage = pageLines;
-            if (el("bookLinesLabel")) el("bookLinesLabel").innerHTML = pageLines + " lines/page";
-            saveReaderSettings();
-        }
-        pageHeight = Math.max(linePx * pageLines + 8, linePx * 5 + 8);
+        /*
+         * Keep the user's saved lines/page preference untouched. On a screen
+         * where that many lines cannot physically fit, use a smaller effective
+         * count for layout only. This prevents a temporary font/spacing change
+         * from overwriting the user's preferred setting in localStorage.
+         */
+        pageHeight = Math.max(Math.floor(linePx * pageLines + 14), Math.floor(linePx * 5 + 14));
         if (pageHeight > viewportHeight) pageHeight = viewportHeight;
 
+        /*
+         * v27: the visible page and the side Back rail are exactly as tall as
+         * the calculated text page. Choosing fewer lines now makes a shorter
+         * page instead of leaving a large dead click area below the text.
+         */
+        if (rail) rail.style.height = pageHeight + "px";
+        if (prevSide) prevSide.style.height = pageHeight + "px";
         spacer.style.height = toolbarHeight + "px";
         viewport.style.marginLeft = railWidth + "px";
         viewport.style.width = viewportWidth + "px";
-        viewport.style.height = viewportHeight + "px";
+        viewport.style.height = pageHeight + "px";
         flow.style.position = "relative";
         flow.style.left = "0px";
         flow.style.width = contentWidth + "px";
@@ -2667,6 +2683,103 @@
         renderBookReader(section, ratio);
     }
 
+    function currentBookSelectionText() {
+        var selection, value;
+        try {
+            if (!window.getSelection) return "";
+            selection = window.getSelection();
+            value = selection ? trim(selection.toString()) : "";
+        } catch (e) {
+            value = "";
+        }
+        if (!value) return "";
+        value = value.replace(/\s+/g, " ");
+        if (value.length > 3000) value = value.substring(0, 3000);
+        return value;
+    }
+
+    function clearBookTextSelection() {
+        var selection;
+        try {
+            if (!window.getSelection) return;
+            selection = window.getSelection();
+            if (selection && selection.removeAllRanges) selection.removeAllRanges();
+            else if (selection && selection.empty) selection.empty();
+        } catch (e) {}
+    }
+
+    function closeBookTranslationPopup(clearSelection) {
+        var overlay = el("bookTranslationOverlay");
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        state.bookSelectionRequestSerial += 1;
+        if (clearSelection) clearBookTextSelection();
+    }
+
+    function renderBookTranslationPopup(sourceText, translatedText, errorTextValue, loading) {
+        var overlay = el("bookTranslationOverlay"), html, closeButton, modal;
+        if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.id = "bookTranslationOverlay";
+            overlay.className = "book-translation-overlay";
+            document.body.appendChild(overlay);
+        }
+        html = '<div id="bookTranslationModal" class="book-translation-modal">' +
+            '<button id="bookTranslationClose" class="book-translation-close" type="button">&#215;</button>' +
+            '<div class="book-translation-heading">Vietnamese</div>' +
+            '<div class="book-translation-source">' + escapeHtml(sourceText) + '</div>' +
+            '<div class="book-translation-result">' +
+            (loading ? 'Translating...' : (errorTextValue ? '<span class="book-translation-error">' + escapeHtml(errorTextValue) + '</span>' : escapeHtml(translatedText))) +
+            '</div></div>';
+        overlay.innerHTML = html;
+        overlay.onclick = function () { closeBookTranslationPopup(true); };
+        modal = el("bookTranslationModal");
+        if (modal) modal.onclick = function (evt) {
+            evt = evt || window.event;
+            if (evt.stopPropagation) evt.stopPropagation();
+            evt.cancelBubble = true;
+        };
+        closeButton = el("bookTranslationClose");
+        if (closeButton) closeButton.onclick = function (evt) {
+            evt = evt || window.event;
+            if (evt.stopPropagation) evt.stopPropagation();
+            evt.cancelBubble = true;
+            closeBookTranslationPopup(true);
+        };
+    }
+
+    function translateSelectedBookText(sourceText) {
+        var serial, now;
+        sourceText = trim(sourceText || "").replace(/\s+/g, " ");
+        if (!sourceText) return;
+        if (sourceText.length > 3000) sourceText = sourceText.substring(0, 3000);
+        now = new Date().getTime();
+        if (sourceText === state.bookSelectionLastText && now - state.bookSelectionHandledAt < 900) return;
+        state.bookSelectionLastText = sourceText;
+        state.bookSelectionHandledAt = now;
+        serial = state.bookSelectionRequestSerial + 1;
+        state.bookSelectionRequestSerial = serial;
+        renderBookTranslationPopup(sourceText, "", "", true);
+        xhrPost("/api/translation/text", { text: sourceText }, function (err, json) {
+            if (serial !== state.bookSelectionRequestSerial) return;
+            if (err || !json || !json.translation) {
+                renderBookTranslationPopup(sourceText, "", err || "Translation failed", false);
+                return;
+            }
+            renderBookTranslationPopup(sourceText, json.translation, "", false);
+        });
+    }
+
+    function scheduleSelectedBookTranslation() {
+        if (state.bookSelectionTimer) window.clearTimeout(state.bookSelectionTimer);
+        state.bookSelectionTimer = window.setTimeout(function () {
+            var selected;
+            state.bookSelectionTimer = null;
+            if (document.body.className !== "book-reader-active") return;
+            selected = currentBookSelectionText();
+            if (selected) translateSelectedBookText(selected);
+        }, 140);
+    }
+
     function bindBookReaderControls() {
         var viewport = el("bookPageViewport");
         el("bookBack").onclick = function () { showBooks(state.booksPage || 1, ""); };
@@ -2675,7 +2788,20 @@
         el("bookNext").onclick = nextBookPage;
         el("bookAa").onclick = function () { state.bookSettingsOpen = !state.bookSettingsOpen; rerenderBookControlsKeepPosition(); };
         if (viewport) {
-            viewport.onclick = function () { nextBookPage(); };
+            viewport.onclick = function (evt) {
+                var selected = currentBookSelectionText();
+                evt = evt || window.event;
+                if (selected) {
+                    translateSelectedBookText(selected);
+                    if (evt.preventDefault) evt.preventDefault();
+                    return false;
+                }
+                if (new Date().getTime() - state.bookSelectionHandledAt < 700) return false;
+                nextBookPage();
+                return true;
+            };
+            viewport.onmouseup = scheduleSelectedBookTranslation;
+            viewport.ontouchend = scheduleSelectedBookTranslation;
         }
         if (state.bookSettingsOpen) {
             el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
@@ -2745,7 +2871,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v26 started. tap-to-next ebook + side back rail + fast line steps + manga reader. Testing API...", false);
+        setStatus("ES5 v27 started. exact-height book pages + saved settings + selection translate. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

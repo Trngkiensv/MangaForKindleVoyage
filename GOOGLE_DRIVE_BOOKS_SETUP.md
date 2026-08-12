@@ -107,3 +107,9 @@ Start Command: npm start
 ```
 
 Do not override the Start Command with `node dist/server.cjs`; v24 starts `dist/server.mjs`.
+
+## v27: select text and translate
+
+On Kindle, long-press and drag across book text to select a word, sentence, or a few lines. The reader sends only that selected text to the server, which calls the configured Cloudflare Workers AI model with a short Vietnamese-translation prompt. The result appears in a dismissible popup. This endpoint requires an app login and does not store the selected text or translation in localStorage or Neon.
+
+Book typography preferences (font size, line spacing, side margin, lines/page, and typeface) remain stored only in the Kindle browser's small reader-settings localStorage object.
