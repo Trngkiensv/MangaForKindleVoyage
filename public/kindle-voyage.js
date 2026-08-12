@@ -75,6 +75,14 @@
         bookSelectionRequestSerial: 0,
         bookSelectionLastText: "",
         bookSelectionHandledAt: 0,
+        bookTouchSelectTimer: null,
+        bookTouchSelecting: false,
+        bookTouchAnchorPoint: null,
+        bookTouchWordEndPoint: null,
+        bookTouchStartX: 0,
+        bookTouchStartY: 0,
+        bookTouchMoved: false,
+        bookTouchSuppressClickUntil: 0,
         loading: false
     };
 
@@ -128,6 +136,13 @@
                 window.clearTimeout(state.bookSelectionTimer);
                 state.bookSelectionTimer = null;
             }
+            if (state.bookTouchSelectTimer) {
+                window.clearTimeout(state.bookTouchSelectTimer);
+                state.bookTouchSelectTimer = null;
+            }
+            state.bookTouchSelecting = false;
+            state.bookTouchAnchorPoint = null;
+            state.bookTouchWordEndPoint = null;
             closeBookTranslationPopup(true);
         }
         // A page turn is debounced to keep the Voyage responsive, but leaving
@@ -2544,7 +2559,7 @@
         if (!shell || !spacer || !viewport || !flow) return;
 
         /*
-         * v27 pagination: the reader chooses how many text line-heights make one page.
+         * v28 pagination: the reader chooses how many text line-heights make one page.
          * The fixed Aa settings panel is ignored when measuring the reading area so
          * opening settings does not silently change page breaks. Images/headings
          * consume vertical space inside the same page, just like a physical page.
@@ -2582,7 +2597,7 @@
         if (pageHeight > viewportHeight) pageHeight = viewportHeight;
 
         /*
-         * v27: the visible page and the side Back rail are exactly as tall as
+         * v28: the visible page and the side Back rail are exactly as tall as
          * the calculated text page. Choosing fewer lines now makes a shorter
          * page instead of leaving a large dead click area below the text.
          */
@@ -2694,7 +2709,6 @@
         }
         if (!value) return "";
         value = value.replace(/\s+/g, " ");
-        if (value.length > 3000) value = value.substring(0, 3000);
         return value;
     }
 
@@ -2751,7 +2765,6 @@
         var serial, now;
         sourceText = trim(sourceText || "").replace(/\s+/g, " ");
         if (!sourceText) return;
-        if (sourceText.length > 3000) sourceText = sourceText.substring(0, 3000);
         now = new Date().getTime();
         if (sourceText === state.bookSelectionLastText && now - state.bookSelectionHandledAt < 900) return;
         state.bookSelectionLastText = sourceText;
@@ -2777,7 +2790,229 @@
             if (document.body.className !== "book-reader-active") return;
             selected = currentBookSelectionText();
             if (selected) translateSelectedBookText(selected);
-        }, 140);
+        }, 180);
+    }
+
+    function bookNodeInsideText(node) {
+        var root = el("bookText");
+        while (node) {
+            if (node === root) return true;
+            node = node.parentNode;
+        }
+        return false;
+    }
+
+    function bookCaretPointFromClient(clientX, clientY) {
+        var range, pos, hit, node, rect, value, offset;
+        try {
+            if (document.caretRangeFromPoint) {
+                range = document.caretRangeFromPoint(clientX, clientY);
+                if (range && bookNodeInsideText(range.startContainer)) {
+                    return { node: range.startContainer, offset: range.startOffset };
+                }
+            }
+        } catch (e1) {}
+        try {
+            if (document.caretPositionFromPoint) {
+                pos = document.caretPositionFromPoint(clientX, clientY);
+                if (pos && bookNodeInsideText(pos.offsetNode)) {
+                    return { node: pos.offsetNode, offset: pos.offset };
+                }
+            }
+        } catch (e2) {}
+
+        /*
+         * Very old Kindle WebKit normally exposes caretRangeFromPoint. Keep a
+         * coarse fallback so long-press still selects something if that API is
+         * missing on a particular firmware build.
+         */
+        try {
+            hit = document.elementFromPoint ? document.elementFromPoint(clientX, clientY) : null;
+            if (!hit || !bookNodeInsideText(hit)) return null;
+            node = hit.firstChild;
+            while (node && node.nodeType !== 3) node = node.nextSibling;
+            if (!node || !node.nodeValue) return null;
+            value = node.nodeValue;
+            rect = hit.getBoundingClientRect ? hit.getBoundingClientRect() : null;
+            if (rect && rect.width > 0) {
+                offset = Math.round(((clientX - rect.left) / rect.width) * value.length);
+            } else {
+                offset = Math.floor(value.length / 2);
+            }
+            if (offset < 0) offset = 0;
+            if (offset > value.length) offset = value.length;
+            return { node: node, offset: offset };
+        } catch (e3) {}
+        return null;
+    }
+
+    function compareBookCaretPoints(a, b) {
+        var ra, rb;
+        if (!a || !b) return 0;
+        if (a.node === b.node) return a.offset === b.offset ? 0 : (a.offset < b.offset ? -1 : 1);
+        try {
+            ra = document.createRange();
+            rb = document.createRange();
+            ra.setStart(a.node, a.offset);
+            ra.collapse(true);
+            rb.setStart(b.node, b.offset);
+            rb.collapse(true);
+            return ra.compareBoundaryPoints(0, rb);
+        } catch (e) {}
+        return 0;
+    }
+
+    function setBookSelectionBetween(startPoint, endPoint) {
+        var range, selection, first = startPoint, last = endPoint;
+        if (!startPoint || !endPoint) return false;
+        try {
+            if (compareBookCaretPoints(first, last) > 0) {
+                first = endPoint;
+                last = startPoint;
+            }
+            range = document.createRange();
+            range.setStart(first.node, first.offset);
+            range.setEnd(last.node, last.offset);
+            selection = window.getSelection ? window.getSelection() : null;
+            if (!selection) return false;
+            if (selection.removeAllRanges) selection.removeAllRanges();
+            selection.addRange(range);
+            return true;
+        } catch (e) {}
+        return false;
+    }
+
+    function bookWordPointsFromCaret(point) {
+        var node, value, offset, start, end;
+        if (!point || !point.node || point.node.nodeType !== 3) return null;
+        node = point.node;
+        value = node.nodeValue || "";
+        if (!value) return null;
+        offset = point.offset;
+        if (offset >= value.length) offset = value.length - 1;
+        if (offset < 0) offset = 0;
+        if (/\s/.test(value.charAt(offset))) {
+            while (offset < value.length && /\s/.test(value.charAt(offset))) offset += 1;
+            if (offset >= value.length) {
+                offset = point.offset - 1;
+                while (offset >= 0 && /\s/.test(value.charAt(offset))) offset -= 1;
+            }
+        }
+        if (offset < 0 || offset >= value.length) return null;
+        start = offset;
+        end = offset + 1;
+        while (start > 0 && !/\s/.test(value.charAt(start - 1))) start -= 1;
+        while (end < value.length && !/\s/.test(value.charAt(end))) end += 1;
+        return {
+            start: { node: node, offset: start },
+            end: { node: node, offset: end }
+        };
+    }
+
+    function beginKindleBookSelection(clientX, clientY) {
+        var point = bookCaretPointFromClient(clientX, clientY);
+        var word = bookWordPointsFromCaret(point);
+        if (!word) return false;
+        state.bookTouchSelecting = true;
+        state.bookTouchAnchorPoint = word.start;
+        state.bookTouchWordEndPoint = word.end;
+        state.bookTouchSuppressClickUntil = new Date().getTime() + 1600;
+        setBookSelectionBetween(word.start, word.end);
+        return true;
+    }
+
+    function extendKindleBookSelection(clientX, clientY) {
+        var point, anchor, fixedEnd;
+        if (!state.bookTouchSelecting || !state.bookTouchAnchorPoint) return;
+        point = bookCaretPointFromClient(clientX, clientY);
+        if (!point) return;
+        anchor = state.bookTouchAnchorPoint;
+        fixedEnd = state.bookTouchWordEndPoint || anchor;
+        if (compareBookCaretPoints(point, anchor) < 0) {
+            setBookSelectionBetween(point, fixedEnd);
+        } else {
+            setBookSelectionBetween(anchor, point);
+        }
+    }
+
+    function cancelBookTouchSelectTimer() {
+        if (state.bookTouchSelectTimer) {
+            window.clearTimeout(state.bookTouchSelectTimer);
+            state.bookTouchSelectTimer = null;
+        }
+    }
+
+    function bindKindleBookTouchSelection(viewport) {
+        if (!viewport) return;
+        viewport.ontouchstart = function (evt) {
+            var touch;
+            evt = evt || window.event;
+            touch = evt.touches && evt.touches.length ? evt.touches[0] : null;
+            if (!touch) return true;
+            cancelBookTouchSelectTimer();
+            state.bookTouchSelecting = false;
+            state.bookTouchAnchorPoint = null;
+            state.bookTouchWordEndPoint = null;
+            state.bookTouchStartX = touch.clientX;
+            state.bookTouchStartY = touch.clientY;
+            state.bookTouchMoved = false;
+            /* Own Kindle touch handling so its old browser cannot turn a
+             * long-press into a page tap or swallow the drag selection. */
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            state.bookTouchSelectTimer = window.setTimeout(function () {
+                state.bookTouchSelectTimer = null;
+                beginKindleBookSelection(state.bookTouchStartX, state.bookTouchStartY);
+            }, 520);
+            return false;
+        };
+        viewport.ontouchmove = function (evt) {
+            var touch, dx, dy;
+            evt = evt || window.event;
+            touch = evt.touches && evt.touches.length ? evt.touches[0] : null;
+            if (!touch) return false;
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            if (state.bookTouchSelecting) {
+                extendKindleBookSelection(touch.clientX, touch.clientY);
+                return false;
+            }
+            dx = Math.abs(touch.clientX - state.bookTouchStartX);
+            dy = Math.abs(touch.clientY - state.bookTouchStartY);
+            if (dx > 14 || dy > 14) {
+                state.bookTouchMoved = true;
+                cancelBookTouchSelectTimer();
+            }
+            return false;
+        };
+        viewport.ontouchend = function (evt) {
+            var wasSelecting = state.bookTouchSelecting;
+            evt = evt || window.event;
+            cancelBookTouchSelectTimer();
+            if (evt.preventDefault) evt.preventDefault();
+            evt.returnValue = false;
+            state.bookTouchSelecting = false;
+            state.bookTouchAnchorPoint = null;
+            state.bookTouchWordEndPoint = null;
+            state.bookTouchSuppressClickUntil = new Date().getTime() + 900;
+            if (wasSelecting) {
+                scheduleSelectedBookTranslation();
+            } else if (!state.bookTouchMoved) {
+                nextBookPage();
+            }
+            return false;
+        };
+        viewport.ontouchcancel = function (evt) {
+            evt = evt || window.event;
+            cancelBookTouchSelectTimer();
+            state.bookTouchSelecting = false;
+            state.bookTouchAnchorPoint = null;
+            state.bookTouchWordEndPoint = null;
+            state.bookTouchMoved = false;
+            state.bookTouchSuppressClickUntil = new Date().getTime() + 500;
+            if (evt.preventDefault) evt.preventDefault();
+            return false;
+        };
     }
 
     function bindBookReaderControls() {
@@ -2791,6 +3026,10 @@
             viewport.onclick = function (evt) {
                 var selected = currentBookSelectionText();
                 evt = evt || window.event;
+                if (new Date().getTime() < state.bookTouchSuppressClickUntil) {
+                    if (evt.preventDefault) evt.preventDefault();
+                    return false;
+                }
                 if (selected) {
                     translateSelectedBookText(selected);
                     if (evt.preventDefault) evt.preventDefault();
@@ -2800,8 +3039,10 @@
                 nextBookPage();
                 return true;
             };
+            /* Desktop/modern browsers can keep their native mouse selection.
+             * Kindle touch uses a custom long-press + drag Range implementation. */
             viewport.onmouseup = scheduleSelectedBookTranslation;
-            viewport.ontouchend = scheduleSelectedBookTranslation;
+            bindKindleBookTouchSelection(viewport);
         }
         if (state.bookSettingsOpen) {
             el("bookFontMinus").onclick = function () { changeBookSetting("font", -2); };
@@ -2871,7 +3112,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v27 started. exact-height book pages + saved settings + selection translate. Testing API...", false);
+        setStatus("ES5 v28 started. Kindle long-press selection + public text translate. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

@@ -108,8 +108,8 @@ Start Command: npm start
 
 Do not override the Start Command with `node dist/server.cjs`; v24 starts `dist/server.mjs`.
 
-## v27: select text and translate
+## v28: Kindle long-press text selection and translate
 
-On Kindle, long-press and drag across book text to select a word, sentence, or a few lines. The reader sends only that selected text to the server, which calls the configured Cloudflare Workers AI model with a short Vietnamese-translation prompt. The result appears in a dismissible popup. This endpoint requires an app login and does not store the selected text or translation in localStorage or Neon.
+On Kindle, press and hold a word for about half a second, then drag across the text to extend the selection. The Voyage reader uses a custom old-WebKit Range selection path instead of relying on the browser's native touch-selection UI. Releasing your finger sends only the selected text to the server, which calls the configured Cloudflare Workers AI model with a short Vietnamese-translation prompt. The result appears in a dismissible popup. This translation endpoint does not require an app login and does not apply the previous app-level translation rate limit. Selected text and translations are not stored in localStorage or Neon.
 
 Book typography preferences (font size, line spacing, side margin, lines/page, and typeface) remain stored only in the Kindle browser's small reader-settings localStorage object.

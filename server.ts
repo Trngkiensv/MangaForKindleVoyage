@@ -603,14 +603,11 @@ app.get('/api/translation/status', async (_req, res) => {
 
 app.post('/api/translation/text', async (req, res) => {
   try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-    if (!allowRate(`book-text-translate:${user.id}`, 30, 10 * 60 * 1000)) {
-      return res.status(429).json({ error: 'Too many translation requests. Please wait a few minutes.' });
-    }
+    // Public ebook selection translation: no app login and no per-user/IP
+    // rate bucket. The server still keeps credentials private and sends only
+    // the selected text to Cloudflare Workers AI.
     const selected = String(req.body?.text || '').trim();
     if (!selected) return res.status(400).json({ error: 'Select some text first' });
-    if (selected.length > 3000) return res.status(400).json({ error: 'Selected text is too long (max 3000 characters)' });
     const result = await translationService.translateSelectedText(selected);
     res.setHeader('Cache-Control', 'no-store');
     return res.json(result);

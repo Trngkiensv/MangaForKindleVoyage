@@ -685,7 +685,6 @@ export class EnglishVietnameseTranslationService {
   }> {
     const source = String(input || '').replace(/\r\n/g, '\n').trim();
     if (!source) throw new Error('No text selected');
-    if (source.length > 3000) throw new Error('Selected text is too long (max 3000 characters)');
     if (!this.enabledByEnv) throw new Error('Translation is disabled');
     if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN) {
       throw new Error('Cloudflare Workers AI is not configured');
@@ -712,7 +711,7 @@ export class EnglishVietnameseTranslationService {
     return {
       sourceLanguage: 'auto',
       targetLanguage: TARGET_LANGUAGE,
-      translation: translated.slice(0, 6000),
+      translation: translated,
     };
   }
 
