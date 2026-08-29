@@ -3047,7 +3047,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v29 started. Tap-word translation mode + public text translate. Testing API...", false);
+        setStatus("ES5 v30 started. Literal per-utterance manga translation + soft-hyphen join. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

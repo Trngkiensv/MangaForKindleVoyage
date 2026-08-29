@@ -66,7 +66,7 @@ const TARGET_LANGUAGE = 'vi' as const;
 const OCR_SPACE_URL = 'https://api.ocr.space/parse/image';
 const DEFAULT_CF_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 const DEFAULT_CF_FALLBACK_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
-const CACHE_VERSION = 13;
+const CACHE_VERSION = 15;
 const MAX_REGIONS = 80;
 const FREE_OCR_MAX_BYTES = 950 * 1024;
 
@@ -162,6 +162,33 @@ function lineFromOcrSpace(rawLine: any): OcrLine | null {
   return { text: text.slice(0, 1500), box };
 }
 
+
+/**
+ * Join OCR.Space physical lines and remove a line-break hyphen when it is
+ * clearly being used only to continue the same word on the next manga line.
+ * Example:
+ *
+ *   SCOT-
+ *   FREE
+ *
+ * becomes "SCOTFREE" before translation. This prevents the OCR layout mark
+ * from being treated as punctuation by the translator. Hyphens that occur
+ * inside a physical OCR line are left untouched.
+ */
+export function joinWrappedOcrLines(previousText: string, nextText: string): string {
+  const left = cleanText(previousText);
+  const right = cleanText(nextText);
+  if (!left) return right;
+  if (!right) return left;
+
+  if (/[A-Za-z]\s*[-\u00ad]\s*$/.test(left) && /^[A-Za-z]/.test(right)) {
+    const normalizedLeft = left.replace(/\s*[-\u00ad]\s*$/, '');
+    return cleanText(`${normalizedLeft}${right}`);
+  }
+
+  return cleanText(`${left} ${right}`);
+}
+
 function horizontalOverlap(a: TranslationBox, b: TranslationBox): number {
   const left = Math.max(a.x, b.x);
   const right = Math.min(a.x + a.width, b.x + b.width);
@@ -252,7 +279,7 @@ export function normalizeOcrSpaceLines(linesInput: any[]): OcrRegion[] {
 
     if (bestIndex >= 0) {
       const region = regions[bestIndex];
-      region.text = cleanText(`${region.text} ${line.text}`).slice(0, 1500);
+      region.text = joinWrappedOcrLines(region.text, line.text).slice(0, 1500);
       region.box = mergeBox(region.box, line.box);
       region.lastLineBox = line.box;
       region.lineCount += 1;
@@ -419,31 +446,14 @@ export class EnglishVietnameseTranslationService {
     };
   }
 
-  private mangaSystemPrompt(): string {
+  private mangaSentenceSystemPrompt(): string {
     return [
-      'Translate English manga dialogue and narration into concise, natural Vietnamese manga wording.',
-      'Be faithful to the source meaning. Do not invent, explain, apologize, answer questions, or add notes.',
-      'Preserve names and proper nouns. Keep emotion, punctuation, insults, and tone.',
-      'Each OCR region is one utterance. Never split or merge ids.',
-      'Return only valid JSON in this exact shape: {"translations":[{"id":0,"text":"..."}]}.',
-      'Return exactly one object for every input id, in the same order.',
+      'Translate exactly one English manga utterance into Vietnamese.',
+      'Translate literally and faithfully using only the supplied utterance.',
+      'Do not infer context from other speech bubbles, the rest of the page, speaker identity, gender, relationships, or unstated meaning.',
+      'Preserve names and proper nouns. Keep punctuation, emotion, profanity, and tone.',
+      'Return only the Vietnamese translation. Do not explain, add notes, or answer the utterance.',
     ].join(' ');
-  }
-
-  private extractLlmJson(raw: string): any | null {
-    let candidate = String(raw || '').trim();
-    if (!candidate) return null;
-    candidate = candidate.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const attempts = [candidate];
-    const firstBrace = candidate.indexOf('{');
-    const lastBrace = candidate.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) attempts.push(candidate.slice(firstBrace, lastBrace + 1));
-    for (const value of attempts) {
-      try {
-        return JSON.parse(value);
-      } catch (_error) {}
-    }
-    return null;
   }
 
   private localSkipReason(source: string): string | null {
@@ -495,14 +505,6 @@ export class EnglishVietnameseTranslationService {
     return /(?:tôi không thể|không thể tìm thấy|không tìm thấy.*(?:văn bản|thông tin)|vui lòng (?:cung cấp|gửi)|hãy cung cấp|i cannot|i can't|cannot find|please provide|as an ai|no text (?:was )?found)/i.test(lower);
   }
 
-  private pageOutputBudget(texts: string[]): number {
-    const sourceChars = texts.reduce((sum, value) => sum + cleanText(value).length, 0);
-    // Manga translation output should be short. A dynamic cap prevents a
-    // reasoning model from consuming a large output budget on meta text.
-    const estimated = 192 + Math.ceil(sourceChars * 1.15) + texts.length * 20;
-    return Math.max(256, Math.min(this.cloudflareMaxTokens, estimated));
-  }
-
   private isLikelyNonTranslatableSource(source: string): boolean {
     const raw = cleanText(source);
     if (!raw) return true;
@@ -546,23 +548,6 @@ export class EnglishVietnameseTranslationService {
     const translatedSet = new Set(translatedWords);
     const overlap = sourceWords.filter((word) => translatedSet.has(word)).length / sourceWords.length;
     return overlap >= 0.82;
-  }
-
-  private translationsFromLlm(raw: string, sourceTexts: string[]): Array<string | null> {
-    const parsed = this.extractLlmJson(raw);
-    const output: Array<string | null> = new Array(sourceTexts.length).fill(null);
-    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.translations) ? parsed.translations : [];
-
-    items.forEach((item: any, arrayIndex: number) => {
-      let id = Number(item?.id);
-      if (!Number.isInteger(id)) id = arrayIndex;
-      if (id < 0 || id >= output.length) return;
-      const value = cleanText(item?.text ?? item?.translation ?? item?.translated ?? '');
-      if (value && !this.looksUntranslated(sourceTexts[id], value) && !this.looksLikeMetaResponse(sourceTexts[id], value)) {
-        output[id] = value.slice(0, 1200);
-      }
-    });
-    return output;
   }
 
   private cloudflareTextFromResponse(json: any): string {
@@ -715,95 +700,81 @@ export class EnglishVietnameseTranslationService {
     };
   }
 
-  private pageJsonResponseFormat(): any {
-    return {
-      type: 'json_schema',
-      json_schema: {
-        type: 'object',
-        properties: {
-          translations: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'integer' },
-                text: { type: 'string' },
-              },
-              required: ['id', 'text'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['translations'],
-        additionalProperties: false,
+
+
+  /** Translate one OCR utterance with zero page-level context. */
+  private async translateOneMangaRegion(sourceInput: string): Promise<string | null> {
+    const source = cleanText(sourceInput);
+    if (!source) return null;
+
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+      { role: 'system', content: this.mangaSentenceSystemPrompt() },
+      {
+        role: 'user',
+        content: `/no_think\nTranslate this utterance literally into Vietnamese. Use only this text; no page context:\n${source}`,
       },
+    ];
+    const maxTokens = Math.max(128, Math.min(this.cloudflareMaxTokens, 96 + Math.ceil(source.length * 0.9)));
+
+    const runModel = async (model: string): Promise<string | null> => {
+      try {
+        let translated = await this.runCloudflareLlm(messages, maxTokens, model);
+        translated = translated
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/^```(?:text)?\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .replace(/^['"]|['"]$/g, '')
+          .trim();
+        if (!translated) return null;
+        if (this.looksUntranslated(source, translated) || this.looksLikeMetaResponse(source, translated)) return null;
+        return cleanText(translated).slice(0, 1200);
+      } catch (error: any) {
+        console.warn(`Manga utterance translation failed on ${model}: ${error?.message || error}`);
+        return null;
+      }
     };
-  }
 
-  private async runPageFallback(messages: Array<{ role: 'system' | 'user'; content: string }>): Promise<string> {
-    console.warn(`Retrying manga page translation with fallback model ${this.cloudflareFallbackModel}.`);
-    return this.runCloudflareLlm(
-      messages,
-      Math.min(this.cloudflareMaxTokens, 3072),
-      this.cloudflareFallbackModel,
-      this.pageJsonResponseFormat(),
-    );
+    let translated = await runModel(this.cloudflareModel);
+    if (!translated && this.allowFallback) {
+      translated = await runModel(this.cloudflareFallbackModel);
+    }
+    return translated;
   }
-
 
   /**
-   * Translate all useful regions on one page in a single LLM request. By
-   * default there are no LLM retries: malformed or missing regions remain
-   * untranslated to protect the daily Workers AI neuron budget.
+   * Translate every OCR region independently. No request contains another
+   * speech bubble from the same page, so the model cannot use page-level
+   * context to guess pronouns, relationships, tone, or omitted meaning.
+   *
+   * A tiny worker pool keeps latency reasonable without blasting Cloudflare
+   * with all bubbles simultaneously. Each request still contains exactly one
+   * utterance.
    */
   private async translateEnglishToVietnamese(texts: string[]): Promise<Array<string | null>> {
     if (!texts.length) return [];
-    const regions = texts.map((text, id) => ({ id, text }));
-    const userPrompt = [
-      '/no_think',
-      'Translate every region from English to Vietnamese.',
-      'Use concise natural Vietnamese manga style. Return translation only; never explain the request.',
-      'Return the same ids exactly once and JSON only.',
-      JSON.stringify({ regions }),
-    ].join('\n');
+    const output: Array<string | null> = new Array(texts.length).fill(null);
+    let nextIndex = 0;
+    const workerCount = Math.min(3, texts.length);
 
-    const messages: Array<{ role: 'system' | 'user'; content: string }> = [
-      { role: 'system', content: this.mangaSystemPrompt() },
-      { role: 'user', content: userPrompt },
-    ];
-
-    let parsed: Array<string | null> = new Array(texts.length).fill(null);
-    try {
-      const raw = await this.runCloudflareLlm(
-        messages,
-        this.pageOutputBudget(texts),
-        this.cloudflareModel,
-      );
-      parsed = this.translationsFromLlm(raw, texts);
-    } catch (error: any) {
-      console.warn(`Primary manga translation failed; no automatic retry to save neurons: ${error?.message || error}`);
-    }
-
-    if (parsed.some((value) => !value) && this.allowFallback) {
-      try {
-        const fallbackRaw = await this.runPageFallback(messages);
-        const fallbackParsed = this.translationsFromLlm(fallbackRaw, texts);
-        for (let i = 0; i < parsed.length; i += 1) {
-          if (!parsed[i] && fallbackParsed[i]) parsed[i] = fallbackParsed[i];
-        }
-      } catch (error: any) {
-        console.warn(`Optional page fallback failed: ${error?.message || error}`);
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= texts.length) return;
+        output[index] = await this.translateOneMangaRegion(texts[index]);
       }
-    }
+    };
 
-    const missing = parsed.filter((value) => !value).length;
+    await Promise.all(new Array(workerCount).fill(null).map(() => worker()));
+
+    const missing = output.filter((value) => !value).length;
     if (missing) {
       console.warn(
         `Translation incomplete: ${missing}/${texts.length} region(s) left in original artwork; ` +
-        `${this.allowFallback ? 'page fallback was attempted once' : 'fallback/retry is disabled to save neurons'}.`,
+        `${this.allowFallback ? 'each failed utterance may use one fallback model call' : 'fallback/retry is disabled to save neurons'}.`,
       );
     }
-    return parsed;
+    return output;
   }
 
   private cacheKey(context: PageJobContext): string {

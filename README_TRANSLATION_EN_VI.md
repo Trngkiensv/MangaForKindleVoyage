@@ -172,3 +172,12 @@ The grouping uses OCR coordinates, so very unusual typography or widely separate
 ### Two separate bubbles were merged
 
 The v12 grouper is deliberately conservative after `.`, `!`, `?`, and `…`. If a particular page still merges two bubbles, the line-grouping thresholds in `normalizeOcrSpaceLines()` can be tightened.
+
+
+## v30: literal per-bubble manga translation
+
+Manga OCR translation no longer sends all speech bubbles from a page in one Cloudflare request. Each useful OCR region is translated in its own request, so the model only sees that utterance and cannot infer meaning from other bubbles on the page. This favors literal/faithful translation over contextual rewriting.
+
+OCR physical lines are also joined more carefully. When one line ends in a hyphen and the next line starts with a letter, no artificial space is inserted. For example `OFF SCOT-` + `FREE` becomes `OFF SCOT-FREE` before translation instead of `OFF SCOT- FREE`. Hyphens already inside a physical OCR line are unchanged.
+
+Because one Cloudflare inference is now used per translated OCR region instead of one inference per page, manga translation can consume more request overhead/neurons on dialogue-heavy pages.
