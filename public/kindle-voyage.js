@@ -106,6 +106,8 @@
     function normalizeProvider(value) {
         value = trim(value).toLowerCase();
         if (value === "mangapill") return "mangapill";
+        if (value === "crawlcomic") return "crawlcomic";
+        if (value === "weebcentral") return "weebcentral";
         if (value === "mangadex") return "mangadex";
         return "mangapill";
     }
@@ -113,8 +115,18 @@
     function providerLabel(value) {
         value = normalizeProvider(value);
         if (value === "mangapill") return "MangaPill";
+        if (value === "crawlcomic") return "CrawlComic / TruyenQQ";
+        if (value === "weebcentral") return "WeebCentral";
         if (value === "mangadex") return "MangaDex";
-        return "WeebCentral";
+        return "MangaPill";
+    }
+
+    function nextProvider(value) {
+        value = normalizeProvider(value);
+        if (value === "mangapill") return "crawlcomic";
+        if (value === "crawlcomic") return "weebcentral";
+        if (value === "weebcentral") return "mangadex";
+        return "mangapill";
     }
 
     function providerStateKey(id, provider) {
@@ -345,7 +357,12 @@
             state.bookLinesPerPage = Math.max(5, Math.min(40, parseInt(s.bookLinesPerPage, 10)));
         if (s.bookFont === "serif" || s.bookFont === "sans" || s.bookFont === "mono")
             state.bookFont = s.bookFont;
-        if (s.mangaProvider === "weebcentral" || s.mangaProvider === "mangapill")
+        if (
+            s.mangaProvider === "weebcentral" ||
+            s.mangaProvider === "mangapill" ||
+            s.mangaProvider === "crawlcomic" ||
+            s.mangaProvider === "mangadex"
+        )
             state.provider = s.mangaProvider;
         // Translation is intentionally OFF on every fresh app start/session.
         // Do not restore an old VI ON value from localStorage: this prevents
@@ -859,6 +876,10 @@
             urlMatch = query.match(/weebcentral\.com\/series\/([^\/?#]+)/i);
         }
         if (!urlMatch) {
+            urlMatch = query.match(/https?:\/\/(?:www\.)?truyenqq\.[^/]+\/([^\/?#]+)(?:[\/?#]|$)/i);
+            if (urlMatch && urlMatch[1]) setMangaProvider("crawlcomic", true);
+        }
+        if (!urlMatch) {
             urlMatch = query.match(/mangapill\.com\/(manga\/[^?#]+)/i);
             if (urlMatch && urlMatch[1]) setMangaProvider("mangapill", true);
         }
@@ -867,7 +888,7 @@
             return;
         }
         if (uuidMatch) {
-            if (state.provider === "mangapill") setMangaProvider("weebcentral", true);
+            setMangaProvider("mangadex", true);
             loadMangaById(query);
             return;
         }
@@ -3128,7 +3149,7 @@
         loadReaderSettings();
         updateSourceButton();
         el("sourceBtn").onclick = function () {
-            setMangaProvider(state.provider === "weebcentral" ? "mangapill" : "weebcentral", true);
+            setMangaProvider(nextProvider(state.provider), true);
             setStatus("Manga source: " + providerLabel(state.provider) + ".", false);
             loadHome();
         };
@@ -3145,7 +3166,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v31.2 started. MangaPill image proxy fix + provider fallback. Testing API...", false);
+        setStatus("ES5 v33 started. Multi-provider + CrawlComic/TruyenQQ. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

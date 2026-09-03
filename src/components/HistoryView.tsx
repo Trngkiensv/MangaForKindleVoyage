@@ -5,8 +5,8 @@ import { History, BookOpen, Clock } from 'lucide-react';
 interface HistoryViewProps {
   history: ReadingHistoryItem[];
   settings: ReaderSettings;
-  onSelectChapter: (chapterId: string, mangaId: string) => void;
-  onSelectManga: (mangaId: string) => void;
+  onSelectChapter: (chapterId: string, mangaId: string, provider?: string) => void;
+  onSelectManga: (mangaId: string, provider?: string) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -36,9 +36,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="space-y-3">
           {history.map((item) => (
             <div
-              key={`${item.mangaId}-${item.chapterId}`}
+              key={`${item.provider || 'mangapill'}-${item.mangaId}-${item.chapterId}`}
               id={`history-item-${item.chapterId}`}
-              onClick={() => onSelectChapter(item.chapterId, item.mangaId)}
+              onClick={() => onSelectChapter(item.chapterId, item.mangaId, item.provider || 'mangapill')}
               className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer active:opacity-70 transition-none ${
                 isEink
                   ? 'bg-white text-black border-4 border-black hover:bg-stone-100'
@@ -53,7 +53,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       isEink ? 'bg-black text-white border-2 border-black' : 'bg-amber-600 text-white'
                     }`}
                   >
-                    {item.chapterTitle === 'Volume' ? 'Vol.' : 'Ch.'} {item.chapterNumber}
+                    {item.chapterTitle === 'Volume' ? 'Vol.' : 'Ch.'} {item.chapterNumber} • {item.provider || 'mangapill'}
                   </span>
                   <span className={`text-xs uppercase ${isEink ? 'text-black' : 'text-stone-300'}`}>
                     Page {item.pageIndex + 1} / {item.totalPages}

@@ -5,6 +5,10 @@ import {
   getMangaById,
   parseProviderInput,
   searchManga,
+  getActiveProvider,
+  cycleActiveProvider,
+  setActiveProvider,
+  type ProviderKey,
 } from './services/provider';
 import {
   getStoredBookmarks,
@@ -23,6 +27,7 @@ import { Sparkles, TrendingUp, Clock, BookOpen, AlertCircle, RefreshCw, Feather 
 
 export default function App() {
   const [settings, setSettings] = useState<ReaderSettings>(getStoredSettings());
+  const [activeProvider, setActiveProviderState] = useState<ProviderKey>(getActiveProvider());
 
   // Views & Routing State
   const [currentView, setCurrentView] = useState<'home' | 'detail' | 'reader' | 'bookmarks' | 'history'>('home');
@@ -47,7 +52,7 @@ export default function App() {
   // Load initial popular manga on mount
   useEffect(() => {
     loadMangaList();
-  }, [page, sortOrder]);
+  }, [page, sortOrder, activeProvider]);
 
   const loadMangaList = async (queryOverride?: string) => {
     setLoadingList(true);
@@ -67,6 +72,10 @@ export default function App() {
         order: orderObj,
       });
 
+      if (res.providerUsed && res.providerUsed !== activeProvider) {
+        setActiveProvider(res.providerUsed);
+        setActiveProviderState(res.providerUsed);
+      }
       setMangaList(res.data);
       setTotalManga(res.total);
     } catch (err: any) {
@@ -82,6 +91,10 @@ export default function App() {
     setPage(1);
 
     const parsed = parseProviderInput(input);
+    if (parsed.provider && parsed.provider !== activeProvider) {
+      setActiveProvider(parsed.provider);
+      setActiveProviderState(parsed.provider);
+    }
 
     if (parsed.type === 'manga' && parsed.id) {
       // Direct Manga ID / URL
@@ -120,8 +133,12 @@ export default function App() {
   };
 
   // Select a Manga to open detail view
-  const handleSelectManga = async (mangaId: string) => {
+  const handleSelectManga = async (mangaId: string, provider?: string) => {
     try {
+      if (provider) {
+        const next = setActiveProvider(provider);
+        setActiveProviderState(next);
+      }
       setLoadingList(true);
       const m = await getMangaById(mangaId);
       setSelectedManga(m);
@@ -141,8 +158,12 @@ export default function App() {
   };
 
   // Select Chapter directly from History
-  const handleSelectHistoryChapter = async (chapterId: string, _mangaId: string) => {
+  const handleSelectHistoryChapter = async (chapterId: string, _mangaId: string, provider?: string) => {
     try {
+      if (provider) {
+        const next = setActiveProvider(provider);
+        setActiveProviderState(next);
+      }
       setLoadingList(true);
       // Load only the requested chapter. Pulling hundreds of chapter records
       // just to resume one history item is expensive on e-ink clients.
@@ -162,6 +183,17 @@ export default function App() {
   const updateSettings = (newSettings: ReaderSettings) => {
     setSettings(newSettings);
     saveStoredSettings(newSettings);
+  };
+
+  const handleCycleProvider = () => {
+    const next = cycleActiveProvider();
+    setActiveProviderState(next);
+    setPage(1);
+    setSearchQuery('');
+    setSelectedManga(null);
+    setSelectedChapterId(null);
+    setActiveChapterList([]);
+    setCurrentView('home');
   };
 
   const isEink = settings.eInkMode;
@@ -194,6 +226,8 @@ export default function App() {
             loadMangaList('');
           }}
           currentView={currentView}
+          activeProvider={activeProvider}
+          onCycleProvider={handleCycleProvider}
         />
       )}
 

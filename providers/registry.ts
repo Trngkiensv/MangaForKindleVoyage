@@ -1,5 +1,6 @@
 import { MangaDexProvider } from './mangadex-provider';
 import { MangaPillProvider } from './mangapill-provider';
+import { CrawlComicProvider } from './crawlcomic-provider';
 import { WeebCentralProvider } from './weebcentral-provider';
 import type { MangaProvider } from './types';
 
@@ -10,6 +11,8 @@ const weebCentral = new WeebCentralProvider();
 providers.set(weebCentral.key, weebCentral);
 const mangaPill = new MangaPillProvider();
 providers.set(mangaPill.key, mangaPill);
+const crawlComic = new CrawlComicProvider();
+providers.set(crawlComic.key, crawlComic);
 
 export function normalizeProviderKey(key?: string): string {
   const requested = String(key || '').toLowerCase();
@@ -24,7 +27,8 @@ export function getProvider(key?: string): MangaProvider {
 
 export function getFallbackProvider(provider: MangaProvider): MangaProvider | null {
   if (provider.key === 'weebcentral') return mangaPill;
-  if (provider.key === 'mangapill') return mangaDex;
+  if (provider.key === 'mangapill') return crawlComic;
+  if (provider.key === 'crawlcomic') return mangaPill;
   return null;
 }
 

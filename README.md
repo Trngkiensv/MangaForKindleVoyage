@@ -61,13 +61,15 @@ The test page checks HTML, old-style JavaScript, and the local API.
 
 ## Provider architecture (manga-tui style)
 
-The MangaPill adapter now follows the extraction strategy from `basirulakhlakborno/manga-scraper` (Cheerio selectors, retry/cache behavior, and JavaScript image-array fallback). MangaPill is the default source.
+The backend is provider-neutral. Built-in providers are MangaPill, CrawlComic / TruyenQQ, WeebCentral, and MangaDex. MangaPill remains the default source. The React header and Kindle Voyage ES5 interface both expose a source switcher that cycles through all four providers and stores the selected provider locally.
 
-The backend is provider-neutral. Built-in providers are MangaDex, WeebCentral, and MangaPill. Kindle Voyage v31.2 adds a `Source` button that cycles between WeebCentral and MangaPill and stores that small preference locally. If WeebCentral fails while browsing/searching/randomizing, discovery automatically retries with MangaPill and switches the active source so subsequent manga/chapter/image requests use the same provider. Saved Manga, History, and reading progress are provider-scoped in Neon, so IDs from different sources cannot overwrite each other. `providers/html-provider-template.ts` remains the starting point for additional server-rendered HTML sources.
+`CrawlComicProvider` ports the TruyenQQ extraction approach from `minhduc1212/Crawl_Comic` into the shared provider contract. It uses the Crawl_Comic chapter/content selectors as its first choices, plus fallback selectors for the current TruyenQQ layout. The default site is `https://truyenqq.com.vn` and can be changed with `CRAWL_COMIC_BASE_URL`.
 
-See `providers/ADDING_PROVIDER.md` for the adapter contract.
+Discovery fallback is provider-aware: MangaPill can fall back to CrawlComic, CrawlComic can fall back to MangaPill, and WeebCentral can fall back to MangaPill. Manga/chapter/image requests keep the selected provider. Bookmarks, history, and reading progress are provider-scoped so IDs from different sources do not collide.
 
-## Use WeebCentral
+See `providers/ADDING_PROVIDER.md` and `CRAWL_COMIC_PROVIDER.md` for details.
+
+## Choose the default provider
 
 PowerShell:
 
@@ -82,7 +84,7 @@ macOS/Linux:
 MANGA_PROVIDER=mangapill npm run dev
 ```
 
-The server default can still be set with `MANGA_PROVIDER`, but the Kindle `Source` button can override it per browser. WeebCentral discovery falls back to MangaPill when unavailable.
+The server default can still be set with `MANGA_PROVIDER`, but either UI can override it per browser. Valid keys are `mangapill`, `crawlcomic`, `weebcentral`, and `mangadex`.
 
 ### Long-series performance
 

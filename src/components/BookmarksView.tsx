@@ -7,7 +7,7 @@ import { toggleBookmark } from '../services/storage';
 interface BookmarksViewProps {
   bookmarks: Bookmark[];
   settings: ReaderSettings;
-  onSelectManga: (mangaId: string) => void;
+  onSelectManga: (mangaId: string, provider?: string) => void;
   onRefreshBookmarks: () => void;
 }
 
@@ -19,9 +19,9 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
 }) => {
   const isEink = settings.eInkMode;
 
-  const handleRemove = (e: React.MouseEvent, mangaId: string, title: string) => {
+  const handleRemove = (e: React.MouseEvent, mangaId: string, title: string, provider?: string) => {
     e.stopPropagation();
-    toggleBookmark(mangaId, title, null);
+    toggleBookmark(mangaId, title, null, provider || 'mangapill');
     onRefreshBookmarks();
   };
 
@@ -44,9 +44,9 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {bookmarks.map((bm) => (
             <div
-              key={bm.mangaId}
+              key={`${bm.provider || 'mangapill'}-${bm.mangaId}`}
               id={`bookmark-item-${bm.mangaId}`}
-              onClick={() => onSelectManga(bm.mangaId)}
+              onClick={() => onSelectManga(bm.mangaId, bm.provider || 'mangapill')}
               className={`p-3 flex items-center justify-between cursor-pointer active:opacity-70 transition-none ${
                 isEink
                   ? 'bg-white text-black border-4 border-black hover:bg-stone-100'
@@ -56,7 +56,7 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
               <div className="flex items-center gap-3 min-w-0 pr-2">
                 {bm.coverUrl ? (
                   <img
-                    src={proxyImageUrl(bm.coverUrl)}
+                    src={proxyImageUrl(bm.coverUrl, bm.provider || 'mangapill')}
                     alt={bm.title}
                     referrerPolicy="no-referrer"
                     className={`w-12 h-16 object-cover flex-shrink-0 ${isEink ? 'border-2 border-black grayscale' : 'border border-stone-700'}`}
@@ -69,14 +69,14 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
                 <div className="min-w-0">
                   <h3 className="font-serif font-extrabold text-sm uppercase line-clamp-2 leading-tight">{bm.title}</h3>
                   <span className={`text-[10px] font-sans font-bold uppercase block mt-1 ${isEink ? 'text-black opacity-80' : 'text-stone-400'}`}>
-                    Saved {new Date(bm.updatedAt).toLocaleDateString()}
+                    {bm.provider || 'mangapill'} • Saved {new Date(bm.updatedAt).toLocaleDateString()}
                   </span>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
-                  onClick={(e) => handleRemove(e, bm.mangaId, bm.title)}
+                  onClick={(e) => handleRemove(e, bm.mangaId, bm.title, bm.provider)}
                   title="Remove bookmark"
                   className={`p-1.5 cursor-pointer ${
                     isEink ? 'border-2 border-black bg-white hover:bg-black hover:text-white' : 'text-stone-400 hover:text-rose-400'

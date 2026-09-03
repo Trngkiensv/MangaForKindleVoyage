@@ -1,4 +1,5 @@
 import { Bookmark, ReaderSettings, ReadingHistoryItem } from '../types';
+import { getActiveProvider } from './provider';
 
 const SETTINGS_KEY = 'kindle_manga_reader_settings_v1';
 const BOOKMARKS_KEY = 'kindle_manga_reader_bookmarks_v1';
@@ -44,10 +45,10 @@ export function getStoredBookmarks(): Bookmark[] {
   }
 }
 
-export function toggleBookmark(mangaId: string, title: string, coverUrl: string | null): boolean {
+export function toggleBookmark(mangaId: string, title: string, coverUrl: string | null, provider: string = getActiveProvider()): boolean {
   try {
     const bookmarks = getStoredBookmarks();
-    const existingIndex = bookmarks.findIndex((b) => b.mangaId === mangaId);
+    const existingIndex = bookmarks.findIndex((b) => (b.provider || 'mangapill') === provider && b.mangaId === mangaId);
 
     if (existingIndex >= 0) {
       bookmarks.splice(existingIndex, 1);
@@ -55,6 +56,7 @@ export function toggleBookmark(mangaId: string, title: string, coverUrl: string 
       return false; // Removed
     } else {
       bookmarks.unshift({
+        provider,
         mangaId,
         title,
         coverUrl,
@@ -68,9 +70,9 @@ export function toggleBookmark(mangaId: string, title: string, coverUrl: string 
   }
 }
 
-export function isBookmarked(mangaId: string): boolean {
+export function isBookmarked(mangaId: string, provider: string = getActiveProvider()): boolean {
   const bookmarks = getStoredBookmarks();
-  return bookmarks.some((b) => b.mangaId === mangaId);
+  return bookmarks.some((b) => (b.provider || 'mangapill') === provider && b.mangaId === mangaId);
 }
 
 export function getStoredHistory(): ReadingHistoryItem[] {
@@ -85,10 +87,12 @@ export function getStoredHistory(): ReadingHistoryItem[] {
 export function saveHistoryItem(item: Omit<ReadingHistoryItem, 'lastReadAt'>): void {
   try {
     const history = getStoredHistory();
-    const existingIndex = history.findIndex((h) => h.mangaId === item.mangaId);
+    const itemProvider = item.provider || getActiveProvider();
+    const existingIndex = history.findIndex((h) => (h.provider || 'mangapill') === itemProvider && h.mangaId === item.mangaId);
 
     const newItem: ReadingHistoryItem = {
       ...item,
+      provider: itemProvider,
       lastReadAt: Date.now(),
     };
 
@@ -105,7 +109,7 @@ export function saveHistoryItem(item: Omit<ReadingHistoryItem, 'lastReadAt'>): v
   }
 }
 
-export function getMangaProgress(mangaId: string): ReadingHistoryItem | null {
+export function getMangaProgress(mangaId: string, provider: string = getActiveProvider()): ReadingHistoryItem | null {
   const history = getStoredHistory();
-  return history.find((h) => h.mangaId === mangaId) || null;
+  return history.find((h) => (h.provider || 'mangapill') === provider && h.mangaId === mangaId) || null;
 }
