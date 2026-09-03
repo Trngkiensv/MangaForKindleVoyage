@@ -642,7 +642,7 @@
         q.push("order%5BfollowedCount%5D=desc");
         // Keep the API URL versioned so a previously cached empty MangaPill
         // browse response from v31 is not reused after the provider fix.
-        q.push("clientv=31.1");
+        q.push("clientv=31.2");
         if (title) q.push("title=" + encodeURIComponent(title));
         return "/api/provider/search?" + q.join("&");
     }
@@ -3145,7 +3145,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v31.1 started. MangaPill browse fix + provider fallback. Testing API...", false);
+        setStatus("ES5 v31.2 started. MangaPill image proxy fix + provider fallback. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

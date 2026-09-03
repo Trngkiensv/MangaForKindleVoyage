@@ -381,10 +381,17 @@ export class MangaPillProvider implements MangaProvider {
   }
 
   getImageRequestHeaders(_url: URL): Record<string, string> {
+    // MangaPill's page CDN expects the same virtual Host header used by
+    // MangaPill's own scraper clients. Node fetch() silently rewrites Host,
+    // so server.ts uses a native HTTPS request for image proxying.
     return {
-      Referer: this.baseUrl,
+      Host: 'mangapill.com',
+      Referer: 'https://mangapill.com',
       'User-Agent': USER_AGENT,
       Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Cache-Control': 'max-age=604800',
+      DNT: '1',
     };
   }
 }

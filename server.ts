@@ -1,4 +1,5 @@
 import express from 'express';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
@@ -732,6 +733,68 @@ app.get('/api/mangadex/*', async (req, res) => {
   }
 });
 
+type BinaryFetchResult = {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  buffer: Buffer;
+};
+
+function fetchBinaryWithHeaders(
+  urlString: string,
+  headers: Record<string, string>,
+  redirects = 0,
+): Promise<BinaryFetchResult> {
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(urlString);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    if (parsed.protocol !== 'https:') {
+      reject(new Error('Only HTTPS image URLs are supported'));
+      return;
+    }
+
+    const request = https.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        headers,
+        servername: parsed.hostname,
+        timeout: 30000,
+      },
+      (response) => {
+        const status = response.statusCode || 0;
+        const location = response.headers.location;
+        if (status >= 300 && status < 400 && location && redirects < 3) {
+          response.resume();
+          const nextUrl = new URL(location, parsed).toString();
+          fetchBinaryWithHeaders(nextUrl, headers, redirects + 1).then(resolve, reject);
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on('end', () => {
+          resolve({
+            status,
+            headers: response.headers as Record<string, string | string[] | undefined>,
+            buffer: Buffer.concat(chunks),
+          });
+        });
+      },
+    );
+    request.on('timeout', () => request.destroy(new Error('Image upstream timed out')));
+    request.on('error', reject);
+    request.end();
+  });
+}
+
 // Image proxy: the Kindle talks HTTP to this PC; the PC downloads HTTPS images.
 // Host validation is delegated to the active provider so a future authorized scraper
 // can opt in only the exact CDN domains it is permitted to fetch.
@@ -754,21 +817,27 @@ app.get('/api/image-proxy', async (req, res) => {
     const providerHeaders = provider.getImageRequestHeaders
       ? provider.getImageRequestHeaders(parsed)
       : {};
-    const response = await fetch(imageUrl, {
-      headers: {
-        'User-Agent': 'KindleVoyageMangaReader/3.1 (image proxy)',
-        Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
-        ...providerHeaders,
-      },
+    // Native https.request is intentional here. Node's fetch implementation
+    // rewrites the Host header to the CDN hostname, while MangaPill's image CDN
+    // expects Host: mangapill.com together with the MangaPill Referer.
+    const upstream = await fetchBinaryWithHeaders(imageUrl, {
+      'User-Agent': 'KindleVoyageMangaReader/3.1.2 (image proxy)',
+      Accept: 'image/jpeg,image/png,image/webp,image/avif,image/*;q=0.8,*/*;q=0.5',
+      ...providerHeaders,
     });
 
-    if (!response.ok) {
-      return res.status(response.status).send('Image fetch failed');
+    if (upstream.status < 200 || upstream.status >= 300) {
+      console.warn(`Image upstream failed: provider=${provider.key} host=${parsed.hostname} status=${upstream.status}`);
+      return res.status(upstream.status || 502).send('Image fetch failed');
     }
 
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    const arrayBuffer = await response.arrayBuffer();
-    const sourceBuffer = Buffer.from(arrayBuffer);
+    const rawContentType = upstream.headers['content-type'];
+    const contentType = Array.isArray(rawContentType) ? rawContentType[0] : rawContentType || 'image/jpeg';
+    const sourceBuffer = upstream.buffer;
+    if (!String(contentType).toLowerCase().startsWith('image/')) {
+      console.warn(`Image upstream returned non-image content: provider=${provider.key} host=${parsed.hostname} content-type=${contentType}`);
+      return res.status(502).send('Upstream did not return an image');
+    }
     const kindleCover = String(req.query.kindle || '').toLowerCase() === 'cover';
 
     if (kindleCover) {
