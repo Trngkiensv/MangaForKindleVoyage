@@ -44,6 +44,16 @@ export function parseProviderInput(input: string): { type: 'manga' | 'chapter' |
     return { type: 'chapter', id: mangaDexChapter[1] };
   }
 
+  const mangaPillManga = trimmed.match(/mangapill\.com\/manga\/(\d+)(?:\/|$)/i);
+  if (mangaPillManga && mangaPillManga[1]) {
+    return { type: 'manga', id: mangaPillManga[1] };
+  }
+
+  const mangaPillChapter = trimmed.match(/mangapill\.com\/chapters\/([^\/?#]+)/i);
+  if (mangaPillChapter && mangaPillChapter[1]) {
+    return { type: 'chapter', id: mangaPillChapter[1] };
+  }
+
   const weebCentralManga = trimmed.match(/weebcentral\.com\/series\/([^\/?#]+)/i);
   if (weebCentralManga && weebCentralManga[1]) {
     return { type: 'manga', id: weebCentralManga[1] };

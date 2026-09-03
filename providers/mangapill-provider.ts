@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import type {
   MangaProvider,
   ProviderChapterPagesResponse,
@@ -5,43 +6,29 @@ import type {
   ProviderSearchResponse,
 } from './types';
 
-const DEFAULT_BASE_URL = 'https://mangapill.com/';
+const DEFAULT_BASE_URL = 'https://mangapill.com';
 const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
 
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCharCode(parseInt(code, 16)))
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>');
-}
+type MangaCard = {
+  id: string;
+  title: string;
+  imageUrl?: string;
+  status?: string;
+  year?: string;
+};
 
-function stripTags(value: string): string {
-  return decodeHtml(value.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]+>/g, ' '))
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+type ChapterInfo = {
+  chapterNumber: string;
+  chapterTitle?: string;
+  chapterUrl: string;
+  releaseDate?: string;
+};
 
-function getAttr(tag: string, name: string): string | undefined {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const quoted = new RegExp(`\\b${escaped}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, 'i').exec(tag);
-  if (quoted) return decodeHtml(quoted[2].trim());
-  const bare = new RegExp(`\\b${escaped}\\s*=\\s*([^\\s>]+)`, 'i').exec(tag);
-  return bare ? decodeHtml(bare[1].trim()) : undefined;
-}
-
-function normalizePath(raw: string): string {
-  let value = decodeHtml(raw || '').trim();
-  try {
-    if (/^https?:\/\//i.test(value)) value = new URL(value).pathname;
-  } catch (_error) {}
-  return value.replace(/^\/+/, '');
-}
+type CacheEntry = { expiresAt: number; html: string };
 
 function normalizeStatus(raw?: string): string {
   const value = String(raw || '').trim().toLowerCase();
@@ -70,23 +57,26 @@ function toMangaShape(input: {
   coverUrl?: string;
   description?: string;
   status?: string;
+  year?: string;
   tags?: string[];
+  altTitles?: string[];
 }): any {
   const now = new Date().toISOString();
   const relationships: any[] = [];
   if (input.coverUrl) {
     relationships.push({
-      id: `mangapill-cover-${input.id.replace(/[^a-z0-9]+/gi, '-')}`,
+      id: `mangapill-cover-${input.id}`,
       type: 'cover_art',
       attributes: { url: input.coverUrl, coverUrl: input.coverUrl },
     });
   }
+
   return {
     id: input.id,
     type: 'manga',
     attributes: {
       title: { en: input.title || 'Untitled Manga' },
-      altTitles: [],
+      altTitles: (input.altTitles || []).map((title) => ({ en: title })),
       description: input.description ? { en: input.description } : {},
       isLocked: false,
       links: {},
@@ -95,7 +85,7 @@ function toMangaShape(input: {
       lastChapter: null,
       publicationDemographic: null,
       status: normalizeStatus(input.status),
-      year: null,
+      year: input.year ? Number(input.year) || null : null,
       contentRating: 'safe',
       tags: (input.tags || []).map(makeTag),
       state: 'published',
@@ -110,15 +100,14 @@ function toMangaShape(input: {
   };
 }
 
-function toChapterShape(id: string, mangaId: string | undefined, number: string): any {
+function toChapterShape(id: string, mangaId: string | undefined, number: string, title?: string): any {
   const now = new Date().toISOString();
-  const relationships: any[] = [];
-  if (mangaId) relationships.push({ id: mangaId, type: 'manga' });
+  const relationships: any[] = mangaId ? [{ id: mangaId, type: 'manga' }] : [];
   return {
     id,
     type: 'chapter',
     attributes: {
-      title: null,
+      title: title || null,
       volume: null,
       chapter: number || '0',
       pages: 0,
@@ -135,155 +124,158 @@ function toChapterShape(id: string, mangaId: string | undefined, number: string)
   };
 }
 
-function extractMeta(html: string, key: string): string | undefined {
-  const regex = /<meta\b[^>]*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(html))) {
-    const tag = match[0];
-    const prop = (getAttr(tag, 'property') || getAttr(tag, 'name') || '').toLowerCase();
-    if (prop === key.toLowerCase()) {
-      const value = getAttr(tag, 'content');
-      if (value) return value;
-    }
-  }
-  return undefined;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function extractH1(html: string): string | undefined {
-  const match = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
-  const value = match ? stripTags(match[1]) : '';
-  return value || undefined;
-}
-
-function extractFirstParagraphAfterH1(html: string): string | undefined {
-  const h1 = /<h1\b[^>]*>[\s\S]*?<\/h1>/i.exec(html);
-  const start = h1 ? (h1.index || 0) + h1[0].length : 0;
-  const match = /<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(html.slice(start));
-  const value = match ? stripTags(match[1]) : '';
-  return value || undefined;
-}
-
-function extractDetailCover(html: string): string | undefined {
-  const mainStart = html.search(/class\s*=\s*(["'])[^"']*\bsm:flex-row\b[^"']*\1/i);
-  const segment = mainStart >= 0 ? html.slice(Math.max(0, mainStart - 500), mainStart + 10000) : html.slice(0, 20000);
-  const imgRegex = /<img\b[^>]*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = imgRegex.exec(segment))) {
-    const value = getAttr(match[0], 'data-src') || getAttr(match[0], 'src');
-    if (value && /^https:\/\//i.test(value)) return value;
-  }
-  return extractMeta(html, 'og:image');
-}
-
-function extractGenres(html: string): string[] {
-  const values: string[] = [];
-  const seen = new Set<string>();
-  const regex = /<a\b([^>]*class\s*=\s*(["'])[^"']*\btext-sm\b[^"']*\2[^>]*)>([\s\S]*?)<\/a>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(html))) {
-    const value = stripTags(match[3]);
-    const key = value.toLowerCase();
-    if (value && !seen.has(key)) {
-      seen.add(key);
-      values.push(value);
-    }
-  }
-  return values;
-}
-
-function extractStatus(html: string): string | undefined {
-  const plain = stripTags(html);
-  const match = plain.match(/\b(Ongoing|Publishing|Finished|Completed|On Hiatus|Hiatus|Discontinued|Cancelled|Canceled)\b/i);
-  return match ? match[1] : undefined;
+function extractChapterId(rawUrl: string): string | undefined {
+  const match = rawUrl.match(/\/chapters\/([^/?#]+)/i);
+  return match?.[1];
 }
 
 export class MangaPillProvider implements MangaProvider {
   readonly key = 'mangapill';
-  readonly displayName = 'MangaPill';
+  readonly displayName = 'MangaPill (manga-scraper)';
 
   private readonly baseUrl: string;
-  private readonly seenImageHosts = new Set<string>(['cdn.readdetectiveconan.com']);
+  private readonly cache = new Map<string, CacheEntry>();
+  private readonly seenImageHosts = new Set<string>();
 
   constructor(baseUrl = process.env.MANGAPILL_BASE_URL || DEFAULT_BASE_URL) {
-    this.baseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
+
+  private absoluteUrl(value?: string): string | undefined {
+    if (!value) return undefined;
+    try {
+      return new URL(value, `${this.baseUrl}/`).toString();
+    } catch (_error) {
+      return undefined;
+    }
   }
 
   private rememberImageUrl(value?: string): string | undefined {
-    if (!value) return undefined;
+    const absolute = this.absoluteUrl(value);
+    if (!absolute) return undefined;
     try {
-      const parsed = new URL(value, this.baseUrl);
-      if (parsed.protocol !== 'https:') return undefined;
-      const host = parsed.hostname.toLowerCase();
-      if (host === 'cdn.readdetectiveconan.com' || host.endsWith('.readdetectiveconan.com')) {
-        this.seenImageHosts.add(host);
-        return parsed.toString();
-      }
-    } catch (_error) {}
-    return undefined;
-  }
-
-  private async fetchHtml(pathOrUrl: string): Promise<string> {
-    const url = new URL(pathOrUrl, this.baseUrl);
-    const response = await fetch(url, {
-      redirect: 'follow',
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        Referer: this.baseUrl,
-        DNT: '1',
-      },
-    });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`MangaPill returned HTTP ${response.status}: ${body.slice(0, 240)}`);
+      const parsed = new URL(absolute);
+      if (!/^https?:$/.test(parsed.protocol)) return undefined;
+      this.seenImageHosts.add(parsed.hostname.toLowerCase());
+      return parsed.toString();
+    } catch (_error) {
+      return undefined;
     }
-    return response.text();
   }
 
-  private parseSearch(html: string, requestedLimit: number): any[] {
-    const items: any[] = [];
+  private async fetchPage(path: string, useCache = true): Promise<cheerio.CheerioAPI> {
+    const url = new URL(path, `${this.baseUrl}/`).toString();
+    if (useCache) {
+      const cached = this.cache.get(url);
+      if (cached && cached.expiresAt > Date.now()) return cheerio.load(cached.html);
+      if (cached) this.cache.delete(url);
+    }
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          redirect: 'follow',
+          headers: {
+            'User-Agent': USER_AGENT,
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            DNT: '1',
+            'Cache-Control': 'max-age=0',
+          },
+        });
+        if (!response.ok) {
+          const body = await response.text();
+          const error = new Error(`MangaPill returned HTTP ${response.status}: ${body.slice(0, 240)}`);
+          if (response.status >= 400 && response.status < 500) throw error;
+          lastError = error;
+        } else {
+          const html = await response.text();
+          if (useCache) this.cache.set(url, { expiresAt: Date.now() + CACHE_TTL_MS, html });
+          return cheerio.load(html);
+        }
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (/HTTP 4\d\d/.test(message)) throw error;
+      }
+      if (attempt < MAX_RETRIES) await sleep(RETRY_DELAY_MS * attempt);
+    }
+    throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${url}`);
+  }
+
+  private extractMangaCards($: cheerio.CheerioAPI): MangaCard[] {
+    const cards: MangaCard[] = [];
     const seen = new Set<string>();
-    const regex = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(html)) && items.length < requestedLimit) {
-      const openTag = `<a${match[1]}>`;
-      const href = getAttr(openTag, 'href') || '';
-      const className = getAttr(openTag, 'class') || '';
-      const id = normalizePath(href);
 
-      // MangaPill's current search cards are `div.grid > div` containing an
-      // `a.mb-2`. Keep the class check to avoid navigation links, but normalize
-      // the href first so both relative and absolute MangaPill URLs work.
-      if (!/(^|\s)mb-2(\s|$)/.test(className) || !/^manga\//i.test(id)) continue;
-      if (!id || seen.has(id)) continue;
+    $('a[href*="/manga/"]').each((_index, element) => {
+      const anchor = $(element);
+      const href = anchor.attr('href') || '';
+      const id = href.match(/\/manga\/(\d+)(?:\/|$)/)?.[1];
+      if (!id || seen.has(id)) return;
+
+      const title = (anchor.attr('title') || anchor.find('div').first().text() || anchor.text()).trim();
+      if (!title) return;
+
+      const img = anchor.find('img').first();
+      const imageUrl = this.rememberImageUrl(img.attr('src') || img.attr('data-src'));
+      const infoText = anchor.find('div, span').last().text();
+      const year = infoText.match(/\b\d{4}\b/)?.[0];
+      const status = infoText.match(/publishing|ongoing|finished|completed|hiatus/i)?.[0];
+
       seen.add(id);
+      cards.push({ id, title, imageUrl, year, status });
+    });
 
-      // The first div inside a.mb-2 is the title in the current MangaPill
-      // markup. Falling back to all anchor text keeps the scraper tolerant to
-      // small markup changes without turning year/status text into the title.
-      const titleDiv = /<div\b[^>]*>([\s\S]*?)<\/div>/i.exec(match[2]);
-      const title =
-        (titleDiv ? stripTags(titleDiv[1]) : '') ||
-        stripTags(match[2]) ||
-        id.split('/').pop() ||
-        'Untitled Manga';
+    return cards;
+  }
 
-      // Covers may live inside the card anchor or immediately before it.
-      const imageSegment = html.slice(Math.max(0, match.index - 2200), match.index) + match[2];
-      const imgs = imageSegment.match(/<img\b[^>]*>/gi) || [];
-      let coverUrl: string | undefined;
-      for (let i = imgs.length - 1; i >= 0; i -= 1) {
-        const candidate = getAttr(imgs[i], 'data-src') || getAttr(imgs[i], 'src');
-        coverUrl = this.rememberImageUrl(candidate);
-        if (coverUrl) break;
+  private extractMetadata($: cheerio.CheerioAPI, label: string): string | undefined {
+    let value: string | undefined;
+    $('div, span, p, td, th').each((_index, element) => {
+      const text = $(element).text();
+      const match = text.match(new RegExp(`${label}\\s*:?\\s*([^\\n]+)`, 'i'));
+      if (match) {
+        value = match[1].trim();
+        return false;
       }
+      return undefined;
+    });
+    return value;
+  }
 
-      const after = html.slice(match.index + match[0].length, match.index + match[0].length + 900);
-      const statusMatch = stripTags(after).match(/\b(Ongoing|Publishing|Finished|Completed|On Hiatus|Hiatus|Discontinued)\b/i);
-      items.push(toMangaShape({ id, title, coverUrl, status: statusMatch ? statusMatch[1] : undefined }));
-    }
-    return items;
+  private extractChapters($: cheerio.CheerioAPI): ChapterInfo[] {
+    const chapters: ChapterInfo[] = [];
+    const seen = new Set<string>();
+
+    $('a[href*="/chapters/"]').each((_index, element) => {
+      const anchor = $(element);
+      const href = anchor.attr('href') || '';
+      const chapterId = extractChapterId(href);
+      if (!chapterId || seen.has(chapterId)) return;
+
+      const text = anchor.text().trim();
+      const chapterNumber =
+        href.match(/chapter-(\d+(?:\.\d+)?)/i)?.[1] ||
+        text.match(/chapter\s*(\d+(?:\.\d+)?)/i)?.[1] ||
+        chapterId.match(/-(\d+)(?:$|-)/)?.[1] ||
+        '0';
+      const dateText = anchor.find('time, .date').text().trim() || anchor.next('time, .date').text().trim();
+
+      seen.add(chapterId);
+      chapters.push({
+        chapterNumber,
+        chapterTitle: text || undefined,
+        chapterUrl: this.absoluteUrl(href) || href,
+        releaseDate: dateText || undefined,
+      });
+    });
+
+    return chapters;
   }
 
   async search(params: URLSearchParams): Promise<ProviderSearchResponse> {
@@ -291,58 +283,96 @@ export class MangaPillProvider implements MangaProvider {
     const limit = Math.max(1, Math.min(24, Number(params.get('limit') || 20) || 20));
     const offset = Math.max(0, Number(params.get('offset') || 0) || 0);
     const page = Math.floor(offset / limit) + 1;
-    const query = new URLSearchParams();
-    // `/search` with no filters only renders MangaPill's search form. To browse
-    // the catalogue (Home/Random), MangaPill requires an actual filter. The
-    // empty q + type=manga combination returns the paginated manga catalogue.
-    query.set('q', title);
-    if (!title) query.set('type', 'manga');
-    query.set('page', String(page));
-    const html = await this.fetchHtml(`search?${query.toString()}`);
-    const data = this.parseSearch(html, limit);
-    const hasNext = /<a\b[^>]*class\s*=\s*(["'])[^"']*\bbtn\b[^"']*\1[^>]*>[\s\S]*?\bnext\b[\s\S]*?<\/a>/i.test(html);
-    const hasPrevious = /<a\b[^>]*class\s*=\s*(["'])[^"']*\bbtn\b[^"']*\1[^>]*>[\s\S]*?\bprevious\b[\s\S]*?<\/a>/i.test(html);
-    const total = hasNext || hasPrevious ? Math.max(offset + data.length + (hasNext ? limit : 0), 10000) : offset + data.length;
+    const path = title
+      ? `/search?q=${encodeURIComponent(title)}&page=${page}`
+      : `/mangas/new?page=${page}`;
+    const $ = await this.fetchPage(path);
+    const all = this.extractMangaCards($);
+    const data = all.slice(0, limit).map((manga) =>
+      toMangaShape({
+        id: manga.id,
+        title: manga.title,
+        coverUrl: manga.imageUrl,
+        status: manga.status,
+        year: manga.year,
+      }),
+    );
+
+    const totalText = $('.total-results, .result-count').text();
+    const explicitTotal = Number(totalText.match(/\d+/)?.[0] || 0);
+    const lastPage = Number($('.pagination a').last().text().trim() || 0);
+    const total = explicitTotal || (lastPage ? lastPage * limit : offset + data.length);
     return { data, total, offset, limit };
   }
 
   async getManga(idRaw: string): Promise<any> {
-    const id = normalizePath(idRaw);
-    if (!/^manga\//i.test(id)) throw new Error('Invalid MangaPill manga id');
-    const html = await this.fetchHtml(id);
-    const title = extractH1(html) || extractMeta(html, 'og:title') || id.split('/').pop() || 'Untitled Manga';
-    const description = extractFirstParagraphAfterH1(html) || extractMeta(html, 'description');
-    const coverUrl = this.rememberImageUrl(extractDetailCover(html));
+    const id = String(idRaw).match(/\d+/)?.[0];
+    if (!id) throw new Error('Invalid MangaPill manga id');
+    const $ = await this.fetchPage(`/manga/${id}`);
+    const title = $('h1').first().text().trim();
+    if (!title) throw new Error(`MangaPill manga ${id} was not found`);
+
+    const altTitles: string[] = [];
+    $('div, p, span').each((_index, element) => {
+      const match = $(element).text().match(/Alternative.*?:(.+?)(?:\n|$)/i);
+      if (match) altTitles.push(...match[1].split(',').map((item) => item.trim()).filter(Boolean));
+    });
+
+    let description = '';
+    const descriptionSelectors = ['p.description', '.description', 'div.summary', '.synopsis', 'p[itemprop="description"]'];
+    for (const selector of descriptionSelectors) {
+      const candidate = $(selector).first().text().trim();
+      if (candidate.length > 50) {
+        description = candidate;
+        break;
+      }
+    }
+    if (!description) {
+      $('p').each((_index, element) => {
+        const candidate = $(element).text().trim();
+        if (candidate.length > description.length && candidate.length > 100) description = candidate;
+      });
+    }
+
+    let coverUrl: string | undefined;
+    const safeTitle = title.replace(/["\\]/g, '');
+    const coverSelectors = [`img[alt*="${safeTitle}"]`, '.manga-cover img', '.cover img', 'img[src*="cover"]', 'img'];
+    for (const selector of coverSelectors) {
+      const img = $(selector).first();
+      const candidate = img.attr('src') || img.attr('data-src');
+      if (candidate && !candidate.includes('logo') && !candidate.includes('icon')) {
+        coverUrl = this.rememberImageUrl(candidate);
+        if (coverUrl) break;
+      }
+    }
+
+    const genres: string[] = [];
+    $('a[href*="/search?genre="], .genre, .tag, a[href*="/genre/"]').each((_index, element) => {
+      const genre = $(element).text().trim();
+      if (genre && !genres.includes(genre)) genres.push(genre);
+    });
+
     return toMangaShape({
       id,
-      title: title.replace(/\s*[|\-]\s*MangaPill\s*$/i, '').trim(),
-      description,
+      title,
       coverUrl,
-      status: extractStatus(html),
-      tags: extractGenres(html),
+      description: description || undefined,
+      status: this.extractMetadata($, 'Status'),
+      year: this.extractMetadata($, 'Year'),
+      tags: genres,
+      altTitles,
     });
   }
 
   async getChapters(mangaIdRaw: string, params: URLSearchParams): Promise<ProviderListResponse> {
-    const mangaId = normalizePath(mangaIdRaw);
-    const html = await this.fetchHtml(mangaId);
-    const chapters: any[] = [];
-    const seen = new Set<string>();
-    const regex = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(html))) {
-      const openTag = `<a${match[1]}>`;
-      const href = getAttr(openTag, 'href') || '';
-      const className = getAttr(openTag, 'class') || '';
-      if (!/(^|\s)border(\s|$)/.test(className) || !/^\/chapters\//i.test(href)) continue;
-      const id = normalizePath(href);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const label = stripTags(match[2]);
-      const numberMatch = label.match(/(?:Chapter\s*)?([0-9]+(?:\.[0-9]+)?)/i);
-      if (!numberMatch) continue;
-      chapters.push(toChapterShape(id, mangaId, numberMatch[1]));
-    }
+    const mangaId = String(mangaIdRaw).match(/\d+/)?.[0];
+    if (!mangaId) throw new Error('Invalid MangaPill manga id');
+    const $ = await this.fetchPage(`/manga/${mangaId}`);
+    const chapters = this.extractChapters($).map((chapter) => {
+      const chapterId = extractChapterId(chapter.chapterUrl);
+      return toChapterShape(chapterId || chapter.chapterUrl, mangaId, chapter.chapterNumber, chapter.chapterTitle);
+    });
+
     const order = String(params.get('order[chapter]') || 'desc').toLowerCase();
     if (order === 'asc') chapters.reverse();
     const total = chapters.length;
@@ -352,45 +382,75 @@ export class MangaPillProvider implements MangaProvider {
   }
 
   async getChapter(chapterIdRaw: string): Promise<any> {
-    const chapterId = normalizePath(chapterIdRaw);
-    if (!/^chapters\//i.test(chapterId)) throw new Error('Invalid MangaPill chapter id');
-    const html = await this.fetchHtml(chapterId);
-    const title = extractH1(html) || '';
-    const numberMatch = title.match(/\bChapter\s+([0-9]+(?:\.[0-9]+)?)/i) || title.match(/\b([0-9]+(?:\.[0-9]+)?)\b/);
-    return toChapterShape(chapterId, undefined, numberMatch ? numberMatch[1] : '0');
+    const chapterId = extractChapterId(chapterIdRaw) || String(chapterIdRaw).replace(/^\/+|\/+$/g, '');
+    if (!chapterId) throw new Error('Invalid MangaPill chapter id');
+    const $ = await this.fetchPage(`/chapters/${chapterId}`);
+    const title = $('h1, .chapter-title, .reader-title, title').first().text().trim();
+    const number = title.match(/chapter\s*(\d+(?:\.\d+)?)/i)?.[1] || chapterId.split('-').pop() || '0';
+    return toChapterShape(chapterId, undefined, number, title || undefined);
   }
 
   async getChapterPages(chapterIdRaw: string): Promise<ProviderChapterPagesResponse> {
-    const chapterId = normalizePath(chapterIdRaw);
-    const html = await this.fetchHtml(chapterId);
+    const chapterId = extractChapterId(chapterIdRaw) || String(chapterIdRaw).replace(/^\/+|\/+$/g, '');
+    if (!chapterId) throw new Error('Invalid MangaPill chapter id');
+    const $ = await this.fetchPage(`/chapters/${chapterId}`);
     const pages: string[] = [];
-    const regex = /<img\b[^>]*class\s*=\s*(["'])[^"']*\bjs-page\b[^"']*\1[^>]*>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(html))) {
-      const url = this.rememberImageUrl(getAttr(match[0], 'data-src') || getAttr(match[0], 'src'));
-      if (url) pages.push(url);
+    const seen = new Set<string>();
+
+    const addPage = (raw?: string) => {
+      const imageUrl = this.rememberImageUrl(raw);
+      if (!imageUrl || seen.has(imageUrl)) return;
+      if (/logo|icon|avatar/i.test(imageUrl)) return;
+      seen.add(imageUrl);
+      pages.push(imageUrl);
+    };
+
+    // These selectors mirror manga-scraper's ChapterExtractor.extractPages.
+    $('img[src*="cdn"], .reader img, #chapter-container img, picture img, .page-img, img.js-page').each(
+      (_index, element) => {
+        const image = $(element);
+        addPage(image.attr('src') || image.attr('data-src'));
+      },
+    );
+
+    // Keep the upstream scraper's JavaScript-array fallback for reader markup changes.
+    if (!pages.length) {
+      const patterns = [
+        /images\s*=\s*(\[[\s\S]+?\])/,
+        /pages\s*=\s*(\[[\s\S]+?\])/,
+        /chapter_images\s*=\s*(\[[\s\S]+?\])/,
+      ];
+      const scripts = $('script').toArray();
+      outer: for (const script of scripts) {
+        const scriptContent = $(script).html() || '';
+        for (const pattern of patterns) {
+          const match = scriptContent.match(pattern);
+          if (!match) continue;
+          try {
+            const values = JSON.parse(match[1]);
+            if (Array.isArray(values)) values.forEach((value) => typeof value === 'string' && addPage(value));
+          } catch (_error) {}
+          if (pages.length) break outer;
+        }
+      }
     }
-    if (!pages.length) throw new Error('MangaPill chapter has no readable page images');
+
+    if (!pages.length) throw new Error(`MangaPill chapter ${chapterId} has no readable page images`);
     return { result: 'ok', pages, dataSaverPages: pages.slice() };
   }
 
   isAllowedImageUrl(url: URL): boolean {
-    if (url.protocol !== 'https:') return false;
+    if (!/^https?:$/.test(url.protocol)) return false;
     const host = url.hostname.toLowerCase();
-    return this.seenImageHosts.has(host) || host === 'cdn.readdetectiveconan.com' || host.endsWith('.readdetectiveconan.com');
+    return this.seenImageHosts.has(host) || host.endsWith('.mangapill.com') || host === 'mangapill.com';
   }
 
   getImageRequestHeaders(_url: URL): Record<string, string> {
-    // MangaPill's page CDN expects the same virtual Host header used by
-    // MangaPill's own scraper clients. Node fetch() silently rewrites Host,
-    // so server.ts uses a native HTTPS request for image proxying.
     return {
-      Host: 'mangapill.com',
-      Referer: 'https://mangapill.com',
+      Referer: `${this.baseUrl}/`,
       'User-Agent': USER_AGENT,
       Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.5',
-      'Cache-Control': 'max-age=604800',
       DNT: '1',
     };
   }

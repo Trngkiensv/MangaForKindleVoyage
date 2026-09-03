@@ -13,17 +13,18 @@ providers.set(mangaPill.key, mangaPill);
 
 export function normalizeProviderKey(key?: string): string {
   const requested = String(key || '').toLowerCase();
-  return providers.has(requested) ? requested : 'weebcentral';
+  return providers.has(requested) ? requested : 'mangapill';
 }
 
 export function getProvider(key?: string): MangaProvider {
-  const configured = key || process.env.MANGA_PROVIDER || 'weebcentral';
+  const configured = key || process.env.MANGA_PROVIDER || 'mangapill';
   const normalized = normalizeProviderKey(configured);
-  return providers.get(normalized) || weebCentral;
+  return providers.get(normalized) || mangaPill;
 }
 
 export function getFallbackProvider(provider: MangaProvider): MangaProvider | null {
   if (provider.key === 'weebcentral') return mangaPill;
+  if (provider.key === 'mangapill') return mangaDex;
   return null;
 }
 

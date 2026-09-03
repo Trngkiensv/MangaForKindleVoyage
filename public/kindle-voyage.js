@@ -6,7 +6,7 @@
     window.__kindleVoyageScriptStarted = true;
 
     var state = {
-        provider: "weebcentral",
+        provider: "mangapill",
         currentManga: null,
         chapters: [],
         currentChapter: null,
@@ -107,7 +107,7 @@
         value = trim(value).toLowerCase();
         if (value === "mangapill") return "mangapill";
         if (value === "mangadex") return "mangadex";
-        return "weebcentral";
+        return "mangapill";
     }
 
     function providerLabel(value) {
