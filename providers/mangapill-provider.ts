@@ -250,20 +250,36 @@ export class MangaPillProvider implements MangaProvider {
       const openTag = `<a${match[1]}>`;
       const href = getAttr(openTag, 'href') || '';
       const className = getAttr(openTag, 'class') || '';
-      if (!/(^|\s)mb-2(\s|$)/.test(className) || !/^\/manga\//i.test(href)) continue;
       const id = normalizePath(href);
+
+      // MangaPill's current search cards are `div.grid > div` containing an
+      // `a.mb-2`. Keep the class check to avoid navigation links, but normalize
+      // the href first so both relative and absolute MangaPill URLs work.
+      if (!/(^|\s)mb-2(\s|$)/.test(className) || !/^manga\//i.test(id)) continue;
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      const title = stripTags(match[2]) || id.split('/').pop() || 'Untitled Manga';
-      const before = html.slice(Math.max(0, match.index - 1800), match.index);
-      const imgs = before.match(/<img\b[^>]*>/gi) || [];
+
+      // The first div inside a.mb-2 is the title in the current MangaPill
+      // markup. Falling back to all anchor text keeps the scraper tolerant to
+      // small markup changes without turning year/status text into the title.
+      const titleDiv = /<div\b[^>]*>([\s\S]*?)<\/div>/i.exec(match[2]);
+      const title =
+        (titleDiv ? stripTags(titleDiv[1]) : '') ||
+        stripTags(match[2]) ||
+        id.split('/').pop() ||
+        'Untitled Manga';
+
+      // Covers may live inside the card anchor or immediately before it.
+      const imageSegment = html.slice(Math.max(0, match.index - 2200), match.index) + match[2];
+      const imgs = imageSegment.match(/<img\b[^>]*>/gi) || [];
       let coverUrl: string | undefined;
       for (let i = imgs.length - 1; i >= 0; i -= 1) {
         const candidate = getAttr(imgs[i], 'data-src') || getAttr(imgs[i], 'src');
         coverUrl = this.rememberImageUrl(candidate);
         if (coverUrl) break;
       }
-      const after = html.slice(match.index + match[0].length, match.index + match[0].length + 800);
+
+      const after = html.slice(match.index + match[0].length, match.index + match[0].length + 900);
       const statusMatch = stripTags(after).match(/\b(Ongoing|Publishing|Finished|Completed|On Hiatus|Hiatus|Discontinued)\b/i);
       items.push(toMangaShape({ id, title, coverUrl, status: statusMatch ? statusMatch[1] : undefined }));
     }
@@ -276,7 +292,11 @@ export class MangaPillProvider implements MangaProvider {
     const offset = Math.max(0, Number(params.get('offset') || 0) || 0);
     const page = Math.floor(offset / limit) + 1;
     const query = new URLSearchParams();
-    if (title) query.set('q', title);
+    // `/search` with no filters only renders MangaPill's search form. To browse
+    // the catalogue (Home/Random), MangaPill requires an actual filter. The
+    // empty q + type=manga combination returns the paginated manga catalogue.
+    query.set('q', title);
+    if (!title) query.set('type', 'manga');
     query.set('page', String(page));
     const html = await this.fetchHtml(`search?${query.toString()}`);
     const data = this.parseSearch(html, limit);
