@@ -373,12 +373,18 @@ export class WeebCentralProvider implements MangaProvider {
 
     this.rememberCookies(response.headers);
 
+    const body = await response.text();
     if (!response.ok) {
-      const body = await response.text();
       throw new Error(`WeebCentral returned HTTP ${response.status}: ${body.slice(0, 240)}`);
     }
+    // Some Cloudflare challenge pages can be returned with HTTP 200. Treat
+    // them as provider-unavailable so discovery can fall back to MangaPill
+    // instead of presenting an empty result set.
+    if (/just a moment/i.test(body) && /cloudflare|cf-chl|challenge/i.test(body)) {
+      throw new Error('WeebCentral returned a Cloudflare challenge page');
+    }
 
-    return response.text();
+    return body;
   }
 
   private parseSearchItem(articleHtml: string): ParsedManga | undefined {

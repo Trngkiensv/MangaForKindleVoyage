@@ -2,7 +2,7 @@ import express from 'express';
 import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
-import { getProvider, listProviders } from './providers/registry';
+import { getFallbackProvider, getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
 import { getDriveBookAsset, getDriveBookPage, getParsedDriveBook, googleBooksConfigured } from './books-drive';
@@ -61,6 +61,19 @@ function queryParamsFromExpress(query: express.Request['query']): URLSearchParam
 function providerForRequest(req: express.Request) {
   const requested = typeof req.query.provider === 'string' ? req.query.provider : undefined;
   return getProvider(requested);
+}
+
+async function searchWithDiscoveryFallback(provider: MangaProvider, params: URLSearchParams) {
+  try {
+    const data = await provider.search(params);
+    return { data, providerUsed: provider.key, fallbackFrom: null as string | null };
+  } catch (error) {
+    const fallback = getFallbackProvider(provider);
+    if (!fallback) throw error;
+    console.warn(`Provider ${provider.key} discovery failed; falling back to ${fallback.key}:`, error);
+    const data = await fallback.search(params);
+    return { data, providerUsed: fallback.key, fallbackFrom: provider.key };
+  }
 }
 
 const SESSION_COOKIE = 'manga_session';
@@ -501,9 +514,9 @@ app.get('/api/provider/search', async (req, res) => {
     const provider = providerForRequest(req);
     const params = queryParamsFromExpress(req.query);
     params.delete('provider');
-    const data = await provider.search(params);
+    const result = await searchWithDiscoveryFallback(provider, params);
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json(data);
+    res.json({ ...result.data, providerUsed: result.providerUsed, fallbackFrom: result.fallbackFrom });
   } catch (error: any) {
     console.error('Provider search error:', error);
     res.status(502).json({ error: error?.message || String(error) });
@@ -512,12 +525,12 @@ app.get('/api/provider/search', async (req, res) => {
 
 app.get('/api/provider/random', async (req, res) => {
   try {
-    const provider = providerForRequest(req);
+    let provider = providerForRequest(req);
+    const requestedProvider = provider.key;
     const requested = Math.max(1, Math.min(10, parseInt(String(req.query.limit || '10'), 10) || 10));
     const pageSize = 24;
     let data: any[] = [];
-    // Sample from a different provider search page on every press, then
-    // shuffle locally. Retry a shallower page if the sampled offset is empty.
+    let fallbackFrom: string | null = null;
     for (let attempt = 0; attempt < 3 && data.length < requested; attempt += 1) {
       const page = attempt === 2 ? 0 : Math.floor(Math.random() * 16);
       const params = new URLSearchParams();
@@ -526,8 +539,12 @@ app.get('/api/provider/random', async (req, res) => {
       params.append('contentRating[]', 'safe');
       params.append('contentRating[]', 'suggestive');
       params.append('includes[]', 'cover_art');
-      const result = await provider.search(params);
-      data = result.data || [];
+      const result = await searchWithDiscoveryFallback(provider, params);
+      if (result.providerUsed !== provider.key) {
+        fallbackFrom = provider.key;
+        provider = getProvider(result.providerUsed);
+      }
+      data = result.data.data || [];
     }
     for (let i = data.length - 1; i > 0; i -= 1) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -536,10 +553,16 @@ app.get('/api/provider/random', async (req, res) => {
       data[j] = tmp;
     }
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ data: data.slice(0, requested), total: data.length, limit: requested });
+    return res.json({
+      data: data.slice(0, requested),
+      total: data.length,
+      limit: requested,
+      providerUsed: provider.key,
+      fallbackFrom: fallbackFrom || (provider.key !== requestedProvider ? requestedProvider : null),
+    });
   } catch (error: any) {
     console.error('Random manga error:', error);
-    return res.status(502).json({ error: 'Could not load random manga' });
+    return res.status(502).json({ error: error?.message || 'Could not load random manga' });
   }
 });
 

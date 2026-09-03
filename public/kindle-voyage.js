@@ -6,6 +6,7 @@
     window.__kindleVoyageScriptStarted = true;
 
     var state = {
+        provider: "weebcentral",
         currentManga: null,
         chapters: [],
         currentChapter: null,
@@ -102,6 +103,75 @@
         return text(value).replace(/^\s+|\s+$/g, "");
     }
 
+    function normalizeProvider(value) {
+        value = trim(value).toLowerCase();
+        if (value === "mangapill") return "mangapill";
+        if (value === "mangadex") return "mangadex";
+        return "weebcentral";
+    }
+
+    function providerLabel(value) {
+        value = normalizeProvider(value);
+        if (value === "mangapill") return "MangaPill";
+        if (value === "mangadex") return "MangaDex";
+        return "WeebCentral";
+    }
+
+    function providerStateKey(id, provider) {
+        return normalizeProvider(provider || state.provider) + "::" + text(id);
+    }
+
+    function addProviderParam(url, provider) {
+        var joiner;
+        if (!url) return url;
+        if (url.indexOf("provider=") !== -1) return url;
+        joiner = url.indexOf("?") === -1 ? "?" : "&";
+        return url + joiner + "provider=" + encodeURIComponent(normalizeProvider(provider || state.provider));
+    }
+
+    function requestNeedsProvider(method, url) {
+        if (url.indexOf("/api/provider/") === 0) return true;
+        if (url.indexOf("/api/translation/chapter/") === 0) return true;
+        if (url.indexOf("/api/reading/progress") === 0) return true;
+        if (url.indexOf("/api/reading/read-chapters") === 0) return true;
+        if (url.indexOf("/api/reading/saved/check") === 0) return true;
+        if (method !== "GET" && url.indexOf("/api/reading/saved") === 0) return true;
+        return false;
+    }
+
+    function providerizeRequestUrl(method, url) {
+        return requestNeedsProvider(method, url) ? addProviderParam(url, state.provider) : url;
+    }
+
+    function updateSourceButton() {
+        var button = el("sourceBtn");
+        if (button) button.innerHTML = "Source: " + providerLabel(state.provider);
+    }
+
+    function setMangaProvider(value, persist) {
+        var next = normalizeProvider(value);
+        if (state.provider !== next) {
+            state.provider = next;
+            state.savedMangaIds = {};
+            state.savedMangaKnown = {};
+            state.readChapterIds = {};
+            state.currentMangaSaved = false;
+            state.currentMangaSavedKnown = false;
+        }
+        if (persist !== false) saveReaderSettings();
+        updateSourceButton();
+    }
+
+    function adoptDiscoveryProvider(json) {
+        var used, from;
+        if (!json || !json.providerUsed) return "";
+        used = normalizeProvider(json.providerUsed);
+        from = json.fallbackFrom ? normalizeProvider(json.fallbackFrom) : "";
+        if (used !== state.provider) setMangaProvider(used, true);
+        if (from && from !== used) return providerLabel(from) + " unavailable; using " + providerLabel(used) + " fallback.";
+        return "";
+    }
+
     function escapeHtml(value) {
         return text(value)
             .replace(/&/g, "&amp;")
@@ -156,6 +226,7 @@
     function xhrGet(url, done) {
         var req;
         try {
+            url = providerizeRequestUrl("GET", url);
             req = new XMLHttpRequest();
             req.open("GET", url, true);
             req.onreadystatechange = function () {
@@ -191,6 +262,7 @@
     function xhrJson(method, url, payload, done) {
         var req;
         try {
+            url = providerizeRequestUrl(method, url);
             req = new XMLHttpRequest();
             req.open(method, url, true);
             req.setRequestHeader("Content-Type", "application/json");
@@ -273,6 +345,8 @@
             state.bookLinesPerPage = Math.max(5, Math.min(40, parseInt(s.bookLinesPerPage, 10)));
         if (s.bookFont === "serif" || s.bookFont === "sans" || s.bookFont === "mono")
             state.bookFont = s.bookFont;
+        if (s.mangaProvider === "weebcentral" || s.mangaProvider === "mangapill")
+            state.provider = s.mangaProvider;
         // Translation is intentionally OFF on every fresh app start/session.
         // Do not restore an old VI ON value from localStorage: this prevents
         // OCR.Space / Cloudflare usage until the reader explicitly enables VI.
@@ -288,7 +362,8 @@
             bookLineHeight: state.bookLineHeight,
             bookMargin: state.bookMargin,
             bookLinesPerPage: state.bookLinesPerPage,
-            bookFont: state.bookFont
+            bookFont: state.bookFont,
+            mangaProvider: state.provider
         });
     }
 
@@ -542,7 +617,7 @@
                 rel.attributes
             ) {
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";
-                if (direct) return "/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct);
+                if (direct) return addProviderParam("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct), state.provider);
                 fileName = rel.attributes.fileName;
                 if (!fileName) return "";
                 direct =
@@ -551,7 +626,7 @@
                     "/" +
                     fileName +
                     ".256.jpg";
-                return "/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct);
+                return addProviderParam("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct), state.provider);
             }
         }
         return "";
@@ -582,8 +657,8 @@
             title = getTitle(m);
             cover = getCover(m);
             desc = getDescription(m);
-            known = !!state.savedMangaKnown[m.id];
-            saved = !!state.savedMangaIds[m.id];
+            known = !!state.savedMangaKnown[providerStateKey(m.id)];
+            saved = !!state.savedMangaIds[providerStateKey(m.id)];
             if (desc.length > 180) desc = desc.substring(0, 180) + "...";
             html += '<div class="manga-item">';
             html += '<div class="cover-wrap">';
@@ -621,8 +696,8 @@
             idx = parseInt(b.getAttribute("data-index"), 10);
             manga = items[idx];
             if (!manga || !manga.id) continue;
-            known = !!state.savedMangaKnown[manga.id];
-            saved = !!state.savedMangaIds[manga.id];
+            known = !!state.savedMangaKnown[providerStateKey(manga.id)];
+            saved = !!state.savedMangaIds[providerStateKey(manga.id)];
             b.disabled = !known;
             b.innerHTML = known ? (saved ? "Remove Saved" : "Save") : "Checking...";
         }
@@ -634,7 +709,7 @@
         if (!state.authUser || !items || !items.length) return;
         for (i = 0; i < items.length && ids.length < 40; i += 1) {
             manga = items[i];
-            if (manga && manga.id && !state.savedMangaKnown[manga.id]) ids.push(manga.id);
+            if (manga && manga.id && !state.savedMangaKnown[providerStateKey(manga.id)]) ids.push(manga.id);
         }
         if (!ids.length) {
             updateMangaListSaveButtons(items);
@@ -648,13 +723,13 @@
                 return;
             }
             for (j = 0; j < ids.length; j += 1) {
-                state.savedMangaKnown[ids[j]] = true;
-                state.savedMangaIds[ids[j]] = false;
+                state.savedMangaKnown[providerStateKey(ids[j])] = true;
+                state.savedMangaIds[providerStateKey(ids[j])] = false;
             }
             savedIds = json.savedIds || [];
             for (j = 0; j < savedIds.length; j += 1) {
-                state.savedMangaKnown[savedIds[j]] = true;
-                state.savedMangaIds[savedIds[j]] = true;
+                state.savedMangaKnown[providerStateKey(savedIds[j])] = true;
+                state.savedMangaIds[providerStateKey(savedIds[j])] = true;
             }
             updateMangaListSaveButtons(items);
         });
@@ -662,8 +737,8 @@
 
     function toggleSavedFromMangaList(manga, items) {
         var isSaved;
-        if (!state.authUser || !manga || !manga.id || !state.savedMangaKnown[manga.id]) return;
-        isSaved = !!state.savedMangaIds[manga.id];
+        if (!state.authUser || !manga || !manga.id || !state.savedMangaKnown[providerStateKey(manga.id)]) return;
+        isSaved = !!state.savedMangaIds[providerStateKey(manga.id)];
         setStatus(isSaved ? "Removing saved manga..." : "Saving manga...", false);
         if (isSaved) {
             xhrDelete("/api/reading/saved/" + encodeURIComponent(manga.id), function (err) {
@@ -671,8 +746,8 @@
                     setStatus(err, true);
                     return;
                 }
-                state.savedMangaIds[manga.id] = false;
-                state.savedMangaKnown[manga.id] = true;
+                state.savedMangaIds[providerStateKey(manga.id)] = false;
+                state.savedMangaKnown[providerStateKey(manga.id)] = true;
                 if (state.currentManga && state.currentManga.id === manga.id) {
                     state.currentMangaSaved = false;
                     state.currentMangaSavedKnown = true;
@@ -686,8 +761,8 @@
                     setStatus(err, true);
                     return;
                 }
-                state.savedMangaIds[manga.id] = true;
-                state.savedMangaKnown[manga.id] = true;
+                state.savedMangaIds[providerStateKey(manga.id)] = true;
+                state.savedMangaKnown[providerStateKey(manga.id)] = true;
                 if (state.currentManga && state.currentManga.id === manga.id) {
                     state.currentMangaSaved = true;
                     state.currentMangaSavedKnown = true;
@@ -738,13 +813,12 @@
                 );
                 return;
             }
+            var fallbackMessage = adoptDiscoveryProvider(json);
             setStatus(
-                "Provider connected. " +
-                    ((json.data && json.data.length) || 0) +
-                    " titles loaded.",
+                fallbackMessage || (providerLabel(state.provider) + " connected. " + ((json.data && json.data.length) || 0) + " titles loaded."),
                 false
             );
-            renderMangaList(json.data || [], "Browse Manga");
+            renderMangaList(json.data || [], "Browse Manga - " + providerLabel(state.provider));
         });
     }
 
@@ -758,8 +832,9 @@
                 showHtml('<div class="heading">Random Manga</div><div class="notice">Random load failed. Try again.</div>');
                 return;
             }
-            setStatus("10 random manga loaded. Tap Random again for another set.", false);
-            renderMangaList(json.data || [], "Random Manga");
+            var fallbackMessage = adoptDiscoveryProvider(json);
+            setStatus(fallbackMessage || ("10 random manga loaded from " + providerLabel(state.provider) + ". Tap Random again for another set."), false);
+            renderMangaList(json.data || [], "Random Manga - " + providerLabel(state.provider));
         });
     }
 
@@ -780,7 +855,16 @@
         if (!urlMatch) {
             urlMatch = query.match(/weebcentral\.com\/series\/([^\/?#]+)/i);
         }
+        if (!urlMatch) {
+            urlMatch = query.match(/mangapill\.com\/(manga\/[^?#]+)/i);
+            if (urlMatch && urlMatch[1]) setMangaProvider("mangapill", true);
+        }
+        if (state.provider === "mangapill" && /^manga\/[0-9]+\//i.test(query)) {
+            loadMangaById(query);
+            return;
+        }
         if (uuidMatch) {
+            if (state.provider === "mangapill") setMangaProvider("weebcentral", true);
             loadMangaById(query);
             return;
         }
@@ -801,8 +885,9 @@
                 );
                 return;
             }
-            setStatus("Search complete.", false);
-            renderMangaList(json.data || [], "Search: " + query);
+            var fallbackMessage = adoptDiscoveryProvider(json);
+            setStatus(fallbackMessage || ("Search complete on " + providerLabel(state.provider) + "."), false);
+            renderMangaList(json.data || [], "Search: " + query + " - " + providerLabel(state.provider));
         });
     }
 
@@ -830,8 +915,8 @@
         state.chapterOffset = 0;
         state.chapterTotal = 0;
         state.chapterLoading = false;
-        state.currentMangaSaved = !!state.savedMangaIds[manga.id];
-        state.currentMangaSavedKnown = !!state.savedMangaKnown[manga.id];
+        state.currentMangaSaved = !!state.savedMangaIds[providerStateKey(manga.id)];
+        state.currentMangaSavedKnown = !!state.savedMangaKnown[providerStateKey(manga.id)];
         state.readChapterIds = {};
         renderMangaDetail(manga, true);
         loadChapters(manga.id, 0);
@@ -1382,12 +1467,12 @@
                 originalFiles = json.pages || [];
                 for (i = 0; i < originalFiles.length; i += 1) {
                     state.pagesOriginal.push(
-                        "/api/image-proxy?url=" + encodeURIComponent(originalFiles[i])
+                        addProviderParam("/api/image-proxy?url=" + encodeURIComponent(originalFiles[i]), state.provider)
                     );
                 }
                 for (i = 0; i < saverFiles.length; i += 1) {
                     state.pagesSaver.push(
-                        "/api/image-proxy?url=" + encodeURIComponent(saverFiles[i])
+                        addProviderParam("/api/image-proxy?url=" + encodeURIComponent(saverFiles[i]), state.provider)
                     );
                 }
                 if (!currentPageCount()) {
@@ -1762,7 +1847,7 @@
     }
 
     function translationCacheKey(chapterId, pageNumber) {
-        return text(chapterId) + "::" + text(pageNumber);
+        return normalizeProvider(state.provider) + "::" + text(chapterId) + "::" + text(pageNumber);
     }
 
     function getHotTranslation(chapterId, pageNumber) {
@@ -2034,8 +2119,8 @@
             if (!err && json) {
                 state.currentMangaSaved = !!json.saved;
                 state.currentMangaSavedKnown = true;
-                state.savedMangaIds[manga.id] = !!json.saved;
-                state.savedMangaKnown[manga.id] = true;
+                state.savedMangaIds[providerStateKey(manga.id)] = !!json.saved;
+                state.savedMangaKnown[providerStateKey(manga.id)] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, state.chapterLoading);
                 if (state.currentMangaSaved && !state.chapterLoading) loadReadMarkersForVisibleChapters();
@@ -2057,8 +2142,8 @@
                 }
                 state.currentMangaSaved = false;
                 state.currentMangaSavedKnown = true;
-                state.savedMangaIds[manga.id] = false;
-                state.savedMangaKnown[manga.id] = true;
+                state.savedMangaIds[providerStateKey(manga.id)] = false;
+                state.savedMangaKnown[providerStateKey(manga.id)] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, false);
                 setStatus("Removed from Saved Manga.", false);
@@ -2071,8 +2156,8 @@
                 }
                 state.currentMangaSaved = true;
                 state.currentMangaSavedKnown = true;
-                state.savedMangaIds[manga.id] = true;
-                state.savedMangaKnown[manga.id] = true;
+                state.savedMangaIds[providerStateKey(manga.id)] = true;
+                state.savedMangaKnown[providerStateKey(manga.id)] = true;
                 state.readChapterIds = {};
                 renderMangaDetail(manga, false);
                 loadReadMarkersForVisibleChapters();
@@ -2114,11 +2199,11 @@
             html += renderDataPager("savedPager", state.savedPage, state.savedPages);
             if (!list.length) html += '<div class="notice">No saved manga yet.</div>';
             for (i = 0; i < list.length; i += 1) {
-                state.savedMangaIds[list[i].manga_id] = true;
-                state.savedMangaKnown[list[i].manga_id] = true;
+                state.savedMangaIds[providerStateKey(list[i].manga_id, list[i].provider)] = true;
+                state.savedMangaKnown[providerStateKey(list[i].manga_id, list[i].provider)] = true;
                 html += '<button type="button" class="chapter saved-open" data-id="' +
-                    escapeHtml(list[i].manga_id) + '"><span class="chapter-main">' +
-                    escapeHtml(list[i].manga_title || list[i].manga_id) + '</span></button>';
+                    escapeHtml(list[i].manga_id) + '" data-provider="' + escapeHtml(list[i].provider || "weebcentral") + '"><span class="chapter-main">' +
+                    escapeHtml(list[i].manga_title || list[i].manga_id) + '</span><span class="chapter-meta">' + escapeHtml(providerLabel(list[i].provider || "weebcentral")) + '</span></button>';
             }
             html += renderDataPager("savedPagerBottom", state.savedPage, state.savedPages);
             showHtml(html);
@@ -2156,9 +2241,9 @@
                     (list[i].chapter_number ? " - " + (list[i].is_volume ? "Vol. " : "Ch. ") + list[i].chapter_number : "");
                 pageText = typeof list[i].page_index !== "undefined" ? " - Page " + (parseInt(list[i].page_index, 10) + 1) : "";
                 html += '<button type="button" class="chapter history-open" data-manga-id="' +
-                    escapeHtml(list[i].manga_id) + '" data-chapter-id="' + escapeHtml(list[i].chapter_id) + '">' +
+                    escapeHtml(list[i].manga_id) + '" data-chapter-id="' + escapeHtml(list[i].chapter_id) + '" data-provider="' + escapeHtml(list[i].provider || "weebcentral") + '">' +
                     '<span class="chapter-main">' + escapeHtml(label) + '</span>' +
-                    '<span class="chapter-meta">Resume directly' + escapeHtml(pageText) + '</span></button>';
+                    '<span class="chapter-meta">' + escapeHtml(providerLabel(list[i].provider || "weebcentral")) + ' - Resume directly' + escapeHtml(pageText) + '</span></button>';
             }
             html += renderDataPager("historyPagerBottom", state.historyPage, state.historyPages);
             showHtml(html);
@@ -2178,20 +2263,22 @@
 
     function bindHistoryButtons() {
         var buttons = document.getElementsByTagName("button");
-        var i, b, mangaId, chapterId;
+        var i, b, mangaId, chapterId, provider;
         for (i = 0; i < buttons.length; i += 1) {
             b = buttons[i];
             if ((" " + b.className + " ").indexOf(" history-open ") !== -1) {
                 mangaId = b.getAttribute("data-manga-id");
                 chapterId = b.getAttribute("data-chapter-id");
-                b.onclick = makeHistoryHandler(mangaId, chapterId);
+                provider = b.getAttribute("data-provider") || "weebcentral";
+                b.onclick = makeHistoryHandler(mangaId, chapterId, provider);
             }
         }
     }
 
-    function makeHistoryHandler(mangaId, chapterId) {
+    function makeHistoryHandler(mangaId, chapterId, provider) {
         return function () {
-            setStatus("Opening saved chapter...", false);
+            setMangaProvider(provider || "weebcentral", true);
+            setStatus("Opening saved chapter from " + providerLabel(state.provider) + "...", false);
             xhrGet("/api/provider/manga/" + encodeURIComponent(mangaId), function (mangaErr, manga) {
                 if (mangaErr || !manga) {
                     setStatus(mangaErr || "Could not load manga", true);
@@ -2213,14 +2300,15 @@
 
     function bindIdButtons(className) {
         var buttons = document.getElementsByTagName("button");
-        var i, b, id;
+        var i, b, id, provider;
         for (i = 0; i < buttons.length; i += 1) {
             b = buttons[i];
             if (
                 (" " + b.className + " ").indexOf(" " + className + " ") !== -1
             ) {
                 id = b.getAttribute("data-id");
-                b.onclick = makeIdHandler(id);
+                provider = b.getAttribute("data-provider") || state.provider;
+                b.onclick = makeIdHandler(id, provider);
             }
         }
     }
@@ -3018,8 +3106,9 @@
         });
     }
 
-    function makeIdHandler(id) {
+    function makeIdHandler(id, provider) {
         return function () {
+            if (provider) setMangaProvider(provider, true);
             loadMangaById(id);
         };
     }
@@ -3034,6 +3123,12 @@
         };
 
         loadReaderSettings();
+        updateSourceButton();
+        el("sourceBtn").onclick = function () {
+            setMangaProvider(state.provider === "weebcentral" ? "mangapill" : "weebcentral", true);
+            setStatus("Manga source: " + providerLabel(state.provider) + ".", false);
+            loadHome();
+        };
         el("searchBtn").onclick = doSearch;
         el("homeBtn").onclick = loadHome;
         el("randomBtn").onclick = loadRandomManga;
@@ -3047,7 +3142,7 @@
             if ((evt.keyCode || evt.which) === 13) doSearch();
         };
 
-        setStatus("ES5 v30 started. Literal per-utterance manga translation + soft-hyphen join. Testing API...", false);
+        setStatus("ES5 v31 started. WeebCentral + MangaPill provider fallback. Testing API...", false);
         xhrGet("/api/health", function (err) {
             if (err) {
                 setStatus("Local API failed: " + err, true);

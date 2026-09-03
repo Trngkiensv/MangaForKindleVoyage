@@ -61,7 +61,7 @@ The test page checks HTML, old-style JavaScript, and the local API.
 
 ## Provider architecture (manga-tui style)
 
-The backend is now provider-neutral. The UI talks to `/api/provider/...` rather than directly to a source-specific API. Built-in providers are MangaDex and WeebCentral. Set `MANGA_PROVIDER=mangadex` or `MANGA_PROVIDER=weebcentral` in the environment; the frontend still has no source selector. `providers/html-provider-template.ts` remains the starting point for additional server-rendered HTML sources.
+The backend is provider-neutral. Built-in providers are MangaDex, WeebCentral, and MangaPill. Kindle Voyage v31 adds a `Source` button that cycles between WeebCentral and MangaPill and stores that small preference locally. If WeebCentral fails while browsing/searching/randomizing, discovery automatically retries with MangaPill and switches the active source so subsequent manga/chapter/image requests use the same provider. Saved Manga, History, and reading progress are provider-scoped in Neon, so IDs from different sources cannot overwrite each other. `providers/html-provider-template.ts` remains the starting point for additional server-rendered HTML sources.
 
 See `providers/ADDING_PROVIDER.md` for the adapter contract.
 
@@ -80,7 +80,7 @@ macOS/Linux:
 MANGA_PROVIDER=weebcentral npm run dev
 ```
 
-The frontend remains provider-neutral; changing `MANGA_PROVIDER` selects the backend provider.
+The server default can still be set with `MANGA_PROVIDER`, but the Kindle `Source` button can override it per browser. WeebCentral discovery falls back to MangaPill when unavailable.
 
 ### Long-series performance
 
