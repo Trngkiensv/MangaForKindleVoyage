@@ -170,6 +170,7 @@ export async function initAuthDatabase() {
         PRIMARY KEY (user_id, provider, chapter_id)
       );
       ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS client_millis BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE reading_progress ALTER COLUMN provider DROP DEFAULT;
       CREATE INDEX IF NOT EXISTS reading_progress_history_idx ON reading_progress(user_id, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS saved_manga (
@@ -180,6 +181,7 @@ export async function initAuthDatabase() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_id, provider, manga_id)
       );
+      ALTER TABLE saved_manga ALTER COLUMN provider DROP DEFAULT;
       CREATE INDEX IF NOT EXISTS saved_manga_user_idx ON saved_manga(user_id, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS book_progress (

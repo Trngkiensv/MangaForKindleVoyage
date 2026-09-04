@@ -27,9 +27,13 @@ const aliases: Record<string, string> = {
 };
 
 export function getProvider(key?: string): MangaProvider {
-  const raw = (key || process.env.MANGA_PROVIDER || 'weebcentral').toLowerCase();
+  const raw = String(key || process.env.MANGA_PROVIDER || 'mangakatana').trim().toLowerCase();
   const requested = aliases[raw] || raw;
-  return providers.get(requested) || weebCentral;
+  const provider = providers.get(requested);
+  if (!provider) {
+    throw new Error(`Unknown manga provider: ${requested || '(empty)'}`);
+  }
+  return provider;
 }
 
 export function listProviders(): Array<{ key: string; displayName: string }> {

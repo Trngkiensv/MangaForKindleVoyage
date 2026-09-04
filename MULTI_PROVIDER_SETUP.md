@@ -11,7 +11,7 @@ Visible manga sources on Kindle:
 No new required environment variables are needed. Keep the existing Render variables. Recommended default:
 
 ```env
-MANGA_PROVIDER=weebcentral
+MANGA_PROVIDER=mangakatana
 ```
 
 Optional overrides (normally leave them unset):
@@ -41,3 +41,8 @@ If the existing database already has those keys/columns, do not drop or recreate
 - MangaKatana: direct HTML metadata/chapter parsing, lazy page-image parsing, and image proxy.
 
 Third-party sites can change markup/API behavior without notice. A source failing does not alter or corrupt another source's Neon rows because provider is part of every manga data key.
+
+
+## v34 strict mode
+
+Current clients always send an explicit `provider=`. Missing/invalid provider keys return HTTP 400; there is no fallback to WeebCentral. MangaKatana chapter pages also parse the full JavaScript image array when the initial HTML contains only one page.

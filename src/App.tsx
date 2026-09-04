@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Chapter, Manga, ReaderSettings } from './types';
 import {
+  getActiveProvider,
   getChapterById,
   getMangaById,
+  MangaProviderKey,
   parseProviderInput,
   searchManga,
+  setActiveProvider,
 } from './services/provider';
 import {
   getStoredBookmarks,
@@ -23,6 +26,7 @@ import { Sparkles, TrendingUp, Clock, BookOpen, AlertCircle, RefreshCw, Feather 
 
 export default function App() {
   const [settings, setSettings] = useState<ReaderSettings>(getStoredSettings());
+  const [provider, setProvider] = useState<MangaProviderKey>(getActiveProvider());
 
   // Views & Routing State
   const [currentView, setCurrentView] = useState<'home' | 'detail' | 'reader' | 'bookmarks' | 'history'>('home');
@@ -47,7 +51,7 @@ export default function App() {
   // Load initial popular manga on mount
   useEffect(() => {
     loadMangaList();
-  }, [page, sortOrder]);
+  }, [page, sortOrder, provider]);
 
   const loadMangaList = async (queryOverride?: string) => {
     setLoadingList(true);
@@ -81,7 +85,7 @@ export default function App() {
     setSearchQuery(input);
     setPage(1);
 
-    const parsed = parseProviderInput(input);
+    const parsed = parseProviderInput(input, provider);
 
     if (parsed.type === 'manga' && parsed.id) {
       // Direct Manga ID / URL
@@ -120,9 +124,13 @@ export default function App() {
   };
 
   // Select a Manga to open detail view
-  const handleSelectManga = async (mangaId: string) => {
+  const handleSelectManga = async (mangaId: string, sourceProvider?: MangaProviderKey) => {
     try {
       setLoadingList(true);
+      if (sourceProvider && sourceProvider !== getActiveProvider()) {
+        setActiveProvider(sourceProvider);
+        setProvider(sourceProvider);
+      }
       const m = await getMangaById(mangaId);
       setSelectedManga(m);
       setCurrentView('detail');
@@ -141,9 +149,13 @@ export default function App() {
   };
 
   // Select Chapter directly from History
-  const handleSelectHistoryChapter = async (chapterId: string, _mangaId: string) => {
+  const handleSelectHistoryChapter = async (chapterId: string, _mangaId: string, sourceProvider?: MangaProviderKey) => {
     try {
       setLoadingList(true);
+      if (sourceProvider && sourceProvider !== getActiveProvider()) {
+        setActiveProvider(sourceProvider);
+        setProvider(sourceProvider);
+      }
       // Load only the requested chapter. Pulling hundreds of chapter records
       // just to resume one history item is expensive on e-ink clients.
       const chapter = await getChapterById(chapterId);
@@ -157,6 +169,19 @@ export default function App() {
     } finally {
       setLoadingList(false);
     }
+  };
+
+  const handleProviderChange = (nextProvider: MangaProviderKey) => {
+    if (nextProvider === provider) return;
+    setActiveProvider(nextProvider);
+    setProvider(nextProvider);
+    setSearchQuery('');
+    setPage(1);
+    setSelectedManga(null);
+    setSelectedChapterId(null);
+    setActiveChapterList([]);
+    setListError(null);
+    setCurrentView('home');
   };
 
   const updateSettings = (newSettings: ReaderSettings) => {
@@ -194,6 +219,8 @@ export default function App() {
             loadMangaList('');
           }}
           currentView={currentView}
+          provider={provider}
+          onProviderChange={handleProviderChange}
         />
       )}
 

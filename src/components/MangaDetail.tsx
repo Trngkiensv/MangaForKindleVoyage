@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Chapter, Manga, ReaderSettings, ReadingHistoryItem } from '../types';
 import {
   formatChapterName,
+  getActiveProvider,
   getCoverUrl,
   getMangaDescription,
   getMangaFeed,
@@ -41,8 +42,8 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
   const [chapterFilter, setChapterFilter] = useState<string>('');
 
   useEffect(() => {
-    setBookmarked(isBookmarked(manga.id));
-    setHistoryItem(getMangaProgress(manga.id));
+    setBookmarked(isBookmarked(getActiveProvider(), manga.id));
+    setHistoryItem(getMangaProgress(getActiveProvider(), manga.id));
   }, [manga.id]);
 
   useEffect(() => {
@@ -66,7 +67,7 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
   };
 
   const handleBookmarkToggle = () => {
-    const newState = toggleBookmark(manga.id, title, coverUrl);
+    const newState = toggleBookmark(getActiveProvider(), manga.id, title, coverUrl);
     setBookmarked(newState);
   };
 

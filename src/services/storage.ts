@@ -38,45 +38,49 @@ export function saveStoredSettings(settings: ReaderSettings): void {
 export function getStoredBookmarks(): Bookmark[] {
   try {
     const raw = localStorage.getItem(BOOKMARKS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items.filter((item) => item && typeof item.provider === 'string' && item.provider) : [];
   } catch (e) {
     return [];
   }
 }
 
-export function toggleBookmark(mangaId: string, title: string, coverUrl: string | null): boolean {
+export function toggleBookmark(provider: string, mangaId: string, title: string, coverUrl: string | null): boolean {
   try {
+    if (!provider) return false;
     const bookmarks = getStoredBookmarks();
-    const existingIndex = bookmarks.findIndex((b) => b.mangaId === mangaId);
+    const existingIndex = bookmarks.findIndex((b) => b.provider === provider && b.mangaId === mangaId);
 
     if (existingIndex >= 0) {
       bookmarks.splice(existingIndex, 1);
       localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-      return false; // Removed
+      return false;
     } else {
       bookmarks.unshift({
+        provider,
         mangaId,
         title,
         coverUrl,
         updatedAt: Date.now(),
       });
       localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-      return true; // Added
+      return true;
     }
   } catch (e) {
     return false;
   }
 }
 
-export function isBookmarked(mangaId: string): boolean {
+export function isBookmarked(provider: string, mangaId: string): boolean {
   const bookmarks = getStoredBookmarks();
-  return bookmarks.some((b) => b.mangaId === mangaId);
+  return bookmarks.some((b) => b.provider === provider && b.mangaId === mangaId);
 }
 
 export function getStoredHistory(): ReadingHistoryItem[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items.filter((item) => item && typeof item.provider === 'string' && item.provider) : [];
   } catch (e) {
     return [];
   }
@@ -85,7 +89,7 @@ export function getStoredHistory(): ReadingHistoryItem[] {
 export function saveHistoryItem(item: Omit<ReadingHistoryItem, 'lastReadAt'>): void {
   try {
     const history = getStoredHistory();
-    const existingIndex = history.findIndex((h) => h.mangaId === item.mangaId);
+    const existingIndex = history.findIndex((h) => h.provider === item.provider && h.mangaId === item.mangaId);
 
     const newItem: ReadingHistoryItem = {
       ...item,
@@ -105,7 +109,7 @@ export function saveHistoryItem(item: Omit<ReadingHistoryItem, 'lastReadAt'>): v
   }
 }
 
-export function getMangaProgress(mangaId: string): ReadingHistoryItem | null {
+export function getMangaProgress(provider: string, mangaId: string): ReadingHistoryItem | null {
   const history = getStoredHistory();
-  return history.find((h) => h.mangaId === mangaId) || null;
+  return history.find((h) => h.provider === provider && h.mangaId === mangaId) || null;
 }

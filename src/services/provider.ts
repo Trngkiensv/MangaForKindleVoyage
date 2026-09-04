@@ -2,6 +2,44 @@ import { Chapter, ChapterPagesResponse, Manga, SearchMangaParams } from '../type
 
 const API_BASE = '/api/provider';
 
+export type MangaProviderKey = 'mangakatana' | 'mangafire' | 'weebcentral' | 'mangadex';
+
+export const MANGA_PROVIDERS: Array<{ key: MangaProviderKey; label: string }> = [
+  { key: 'mangakatana', label: 'MangaKatana' },
+  { key: 'mangafire', label: 'MangaFire' },
+  { key: 'weebcentral', label: 'WeebCentral' },
+  { key: 'mangadex', label: 'MangaDex' },
+];
+
+const PROVIDER_STORAGE_KEY = 'kindle_manga_provider_v34';
+let activeProvider: MangaProviderKey = 'mangakatana';
+
+function isProviderKey(value: unknown): value is MangaProviderKey {
+  return MANGA_PROVIDERS.some((item) => item.key === value);
+}
+
+try {
+  const stored = typeof window !== 'undefined' ? window.localStorage.getItem(PROVIDER_STORAGE_KEY) : null;
+  if (isProviderKey(stored)) activeProvider = stored;
+} catch (_error) {}
+
+export function getActiveProvider(): MangaProviderKey {
+  return activeProvider;
+}
+
+export function setActiveProvider(provider: MangaProviderKey): void {
+  if (!isProviderKey(provider)) throw new Error(`Unknown manga provider: ${provider}`);
+  activeProvider = provider;
+  try {
+    if (typeof window !== 'undefined') window.localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
+  } catch (_error) {}
+}
+
+function providerUrl(url: string, provider: MangaProviderKey = activeProvider): string {
+  const separator = url.indexOf('?') === -1 ? '?' : '&';
+  return `${url}${separator}provider=${encodeURIComponent(provider)}`;
+}
+
 type QueryPair = [string, string];
 
 function buildQuery(pairs: QueryPair[]): string {
@@ -14,10 +52,13 @@ function addPair(pairs: QueryPair[], key: string, value: string | number): void 
   pairs.push([key, String(value)]);
 }
 
-export function proxyImageUrl(url: string): string {
+export function proxyImageUrl(url: string, provider: MangaProviderKey = activeProvider): string {
   if (!url) return url;
-  if (url.indexOf('/api/image-proxy?url=') === 0) return url;
-  return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+  if (url.indexOf('/api/image-proxy?') === 0) {
+    if (/[?&]provider=/.test(url)) return url;
+    return providerUrl(url, provider);
+  }
+  return providerUrl(`/api/image-proxy?url=${encodeURIComponent(url)}`, provider);
 }
 
 /**
@@ -25,33 +66,43 @@ export function proxyImageUrl(url: string): string {
  * backwards compatibility. Other providers can add their URL formats here
  * without changing the UI.
  */
-export function parseProviderInput(input: string): { type: 'manga' | 'chapter' | 'search'; id?: string } {
+export function parseProviderInput(input: string, provider: MangaProviderKey = activeProvider): { type: 'manga' | 'chapter' | 'search'; id?: string } {
   const trimmed = input.trim();
   if (!trimmed) return { type: 'search' };
 
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuidRegex.test(trimmed)) {
+  if (provider === 'mangadex' && uuidRegex.test(trimmed)) {
     return { type: 'manga', id: trimmed };
   }
 
   const mangaDexManga = trimmed.match(/mangadex\.org\/(?:title|manga)\/([0-9a-f-]{36})/i);
-  if (mangaDexManga && mangaDexManga[1]) {
+  if (provider === 'mangadex' && mangaDexManga && mangaDexManga[1]) {
     return { type: 'manga', id: mangaDexManga[1] };
   }
 
   const mangaDexChapter = trimmed.match(/mangadex\.org\/chapter\/([0-9a-f-]{36})/i);
-  if (mangaDexChapter && mangaDexChapter[1]) {
+  if (provider === 'mangadex' && mangaDexChapter && mangaDexChapter[1]) {
     return { type: 'chapter', id: mangaDexChapter[1] };
   }
 
   const weebCentralManga = trimmed.match(/weebcentral\.com\/series\/([^\/?#]+)/i);
-  if (weebCentralManga && weebCentralManga[1]) {
+  if (provider === 'weebcentral' && weebCentralManga && weebCentralManga[1]) {
     return { type: 'manga', id: weebCentralManga[1] };
   }
 
   const weebCentralChapter = trimmed.match(/weebcentral\.com\/chapters\/([^\/?#]+)/i);
-  if (weebCentralChapter && weebCentralChapter[1]) {
+  if (provider === 'weebcentral' && weebCentralChapter && weebCentralChapter[1]) {
     return { type: 'chapter', id: weebCentralChapter[1] };
+  }
+
+  if (provider === 'mangakatana') {
+    const mangaKatanaManga = trimmed.match(/mangakatana\.com\/manga\/([^\/?#]+)/i);
+    if (mangaKatanaManga && mangaKatanaManga[1]) return { type: 'manga', id: mangaKatanaManga[1] };
+  }
+
+  if (provider === 'mangafire') {
+    const mangaFireManga = trimmed.match(/mangafire\.to\/manga\/([^\/?#]+)/i) || trimmed.match(/mangafire\.to\/title\/([^\/?#]+)/i);
+    if (mangaFireManga && mangaFireManga[1]) return { type: 'manga', id: mangaFireManga[1].split('-')[0] };
   }
 
   return { type: 'search' };
@@ -85,13 +136,13 @@ export async function searchManga(
     addPair(query, 'order[followedCount]', 'desc');
   }
 
-  const res = await fetch(`${API_BASE}/search?${buildQuery(query)}`);
+  const res = await fetch(providerUrl(`${API_BASE}/search?${buildQuery(query)}`));
   if (!res.ok) throw new Error(`Provider search failed: ${res.status}`);
   return await res.json();
 }
 
 export async function getMangaById(id: string): Promise<Manga> {
-  const res = await fetch(`${API_BASE}/manga/${encodeURIComponent(id)}`);
+  const res = await fetch(providerUrl(`${API_BASE}/manga/${encodeURIComponent(id)}`));
   if (!res.ok) throw new Error(`Failed to fetch manga details (${res.status})`);
   return await res.json();
 }
@@ -111,20 +162,20 @@ export async function getMangaFeed(
   addPair(query, 'contentRating[]', 'erotica');
 
   const res = await fetch(
-    `${API_BASE}/manga/${encodeURIComponent(mangaId)}/chapters?${buildQuery(query)}`,
+    providerUrl(`${API_BASE}/manga/${encodeURIComponent(mangaId)}/chapters?${buildQuery(query)}`),
   );
   if (!res.ok) throw new Error(`Failed to fetch chapters (${res.status})`);
   return await res.json();
 }
 
 export async function getChapterById(chapterId: string): Promise<Chapter> {
-  const res = await fetch(`${API_BASE}/chapter/${encodeURIComponent(chapterId)}`);
+  const res = await fetch(providerUrl(`${API_BASE}/chapter/${encodeURIComponent(chapterId)}`));
   if (!res.ok) throw new Error(`Failed to fetch chapter details (${res.status})`);
   return await res.json();
 }
 
 export async function getChapterPages(chapterId: string): Promise<ChapterPagesResponse> {
-  const res = await fetch(`${API_BASE}/chapter/${encodeURIComponent(chapterId)}/pages`);
+  const res = await fetch(providerUrl(`${API_BASE}/chapter/${encodeURIComponent(chapterId)}/pages`));
   if (!res.ok) throw new Error(`Failed to fetch chapter pages (${res.status})`);
   return await res.json();
 }

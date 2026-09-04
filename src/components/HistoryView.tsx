@@ -1,12 +1,13 @@
 import React from 'react';
 import { ReadingHistoryItem, ReaderSettings } from '../types';
+import { MangaProviderKey } from '../services/provider';
 import { History, BookOpen, Clock } from 'lucide-react';
 
 interface HistoryViewProps {
   history: ReadingHistoryItem[];
   settings: ReaderSettings;
-  onSelectChapter: (chapterId: string, mangaId: string) => void;
-  onSelectManga: (mangaId: string) => void;
+  onSelectChapter: (chapterId: string, mangaId: string, provider?: MangaProviderKey) => void;
+  onSelectManga: (mangaId: string, provider?: MangaProviderKey) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -36,9 +37,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="space-y-3">
           {history.map((item) => (
             <div
-              key={`${item.mangaId}-${item.chapterId}`}
+              key={`${item.provider}-${item.mangaId}-${item.chapterId}`}
               id={`history-item-${item.chapterId}`}
-              onClick={() => onSelectChapter(item.chapterId, item.mangaId)}
+              onClick={() => onSelectChapter(item.chapterId, item.mangaId, item.provider as MangaProviderKey)}
               className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer active:opacity-70 transition-none ${
                 isEink
                   ? 'bg-white text-black border-4 border-black hover:bg-stone-100'

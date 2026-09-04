@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BookMarked, History, Search, Settings, RefreshCw, Feather, BookOpen, Globe } from 'lucide-react';
 import { ReaderSettings } from '../types';
+import { MANGA_PROVIDERS, MangaProviderKey } from '../services/provider';
 
 interface HeaderProps {
   settings: ReaderSettings;
@@ -11,6 +12,8 @@ interface HeaderProps {
   onOpenHistory: () => void;
   onGoHome: () => void;
   currentView: string;
+  provider: MangaProviderKey;
+  onProviderChange: (provider: MangaProviderKey) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +25,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHistory,
   onGoHome,
   currentView,
+  provider,
+  onProviderChange,
 }) => {
   const [searchInput, setSearchInput] = useState('');
 
@@ -112,6 +117,21 @@ export const Header: React.FC<HeaderProps> = ({
             Search
           </button>
         </form>
+
+        <label className={`flex items-center gap-1.5 px-2 py-1 text-[11px] font-black uppercase ${isEink ? 'border-2 border-black bg-white text-black' : 'border border-stone-700 bg-stone-800 text-stone-200'}`}>
+          <Globe size={14} />
+          <span className="hidden sm:inline">Source</span>
+          <select
+            id="manga-provider-select"
+            value={provider}
+            onChange={(e) => onProviderChange(e.target.value as MangaProviderKey)}
+            className={`font-black uppercase cursor-pointer ${isEink ? 'bg-white text-black' : 'bg-stone-800 text-stone-100'}`}
+          >
+            {MANGA_PROVIDERS.map((item) => (
+              <option key={item.key} value={item.key}>{item.label}</option>
+            ))}
+          </select>
+        </label>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 text-xs font-sans">

@@ -55,7 +55,7 @@ Only add image/CDN hosts to `allowedImageHosts` when you are authorized to fetch
 Set the backend provider before starting the app:
 
 ```env
-MANGA_PROVIDER=weebcentral
+MANGA_PROVIDER=mangakatana
 ```
 
 The UI still has no source selector. The backend chooses the provider from `MANGA_PROVIDER`.

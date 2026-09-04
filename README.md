@@ -61,7 +61,7 @@ The test page checks HTML, old-style JavaScript, and the local API.
 
 ## Provider architecture (manga-tui style)
 
-The backend is provider-neutral. The Kindle UI talks to `/api/provider/...` and now exposes three explicit source buttons: **WeebCentral**, **MangaFire**, and **MangaKatana**. `MANGA_PROVIDER=weebcentral` remains the server default; the selected Kindle source is sent as a `provider=` query on every manga, chapter, image-proxy, Saved, History-progress, and translation request. MangaDex remains available as a backend compatibility provider but is not shown in the Voyage source buttons. `providers/html-provider-template.ts` remains the starting point for additional sources.
+The backend is provider-neutral but provider selection is strict. React and Kindle send `provider=` on every manga, chapter, page, image-proxy, reading-state, and chapter-translation request. Missing/unknown providers return HTTP 400 and are never replaced by WeebCentral. The selectable sources are **MangaKatana**, **MangaFire**, **WeebCentral**, and **MangaDex**. `MANGA_PROVIDER=mangakatana` is only the health/default configuration value; current reader requests remain explicit.
 
 See `providers/ADDING_PROVIDER.md` for the adapter contract.
 
@@ -74,17 +74,17 @@ Saved manga and manga progress are keyed by `provider` in Neon. Existing `weebce
 PowerShell:
 
 ```powershell
-$env:MANGA_PROVIDER="weebcentral"
+$env:MANGA_PROVIDER="mangakatana"
 npm run dev
 ```
 
 macOS/Linux:
 
 ```bash
-MANGA_PROVIDER=weebcentral npm run dev
+MANGA_PROVIDER=mangakatana npm run dev
 ```
 
-The frontend remains provider-neutral; `MANGA_PROVIDER` controls the initial server default, while the three Kindle source buttons can switch providers without redeploying.
+The frontend remains provider-neutral; `MANGA_PROVIDER` controls the health/default configuration value, while the four source buttons/selectors persist the user choice and every reader request stays on that explicit provider.
 
 ### Long-series performance
 

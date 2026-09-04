@@ -1,13 +1,13 @@
 import React from 'react';
 import { Bookmark, ReaderSettings } from '../types';
 import { BookMarked, Trash2, ArrowRight } from 'lucide-react';
-import { proxyImageUrl } from '../services/provider';
+import { MangaProviderKey, proxyImageUrl } from '../services/provider';
 import { toggleBookmark } from '../services/storage';
 
 interface BookmarksViewProps {
   bookmarks: Bookmark[];
   settings: ReaderSettings;
-  onSelectManga: (mangaId: string) => void;
+  onSelectManga: (mangaId: string, provider?: MangaProviderKey) => void;
   onRefreshBookmarks: () => void;
 }
 
@@ -19,9 +19,9 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
 }) => {
   const isEink = settings.eInkMode;
 
-  const handleRemove = (e: React.MouseEvent, mangaId: string, title: string) => {
+  const handleRemove = (e: React.MouseEvent, provider: MangaProviderKey, mangaId: string, title: string) => {
     e.stopPropagation();
-    toggleBookmark(mangaId, title, null);
+    toggleBookmark(provider, mangaId, title, null);
     onRefreshBookmarks();
   };
 
@@ -44,9 +44,9 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {bookmarks.map((bm) => (
             <div
-              key={bm.mangaId}
+              key={`${bm.provider}-${bm.mangaId}`}
               id={`bookmark-item-${bm.mangaId}`}
-              onClick={() => onSelectManga(bm.mangaId)}
+              onClick={() => onSelectManga(bm.mangaId, bm.provider as MangaProviderKey)}
               className={`p-3 flex items-center justify-between cursor-pointer active:opacity-70 transition-none ${
                 isEink
                   ? 'bg-white text-black border-4 border-black hover:bg-stone-100'
@@ -56,7 +56,7 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
               <div className="flex items-center gap-3 min-w-0 pr-2">
                 {bm.coverUrl ? (
                   <img
-                    src={proxyImageUrl(bm.coverUrl)}
+                    src={proxyImageUrl(bm.coverUrl, bm.provider as MangaProviderKey)}
                     alt={bm.title}
                     referrerPolicy="no-referrer"
                     className={`w-12 h-16 object-cover flex-shrink-0 ${isEink ? 'border-2 border-black grayscale' : 'border border-stone-700'}`}
@@ -76,7 +76,7 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
 
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
-                  onClick={(e) => handleRemove(e, bm.mangaId, bm.title)}
+                  onClick={(e) => handleRemove(e, bm.provider as MangaProviderKey, bm.mangaId, bm.title)}
                   title="Remove bookmark"
                   className={`p-1.5 cursor-pointer ${
                     isEink ? 'border-2 border-black bg-white hover:bg-black hover:text-white' : 'text-stone-400 hover:text-rose-400'

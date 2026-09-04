@@ -108,6 +108,105 @@ function parseGenres(html: string): string[] {
   return values.slice(0, 30);
 }
 
+
+function decodeJavaScriptEscapes(value: string): string {
+  return String(value || '')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\\//g, '/')
+    .replace(/\\([\\"'])/g, '$1')
+    .replace(/\\r/g, '\r')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t');
+}
+
+function stringLiteralsFromJavaScript(source: string): string[] {
+  const values: string[] = [];
+  let i = 0;
+  while (i < source.length) {
+    const quote = source[i];
+    if (quote !== '"' && quote !== "'" && quote !== '`') {
+      i += 1;
+      continue;
+    }
+    let raw = '';
+    let escaped = false;
+    let hasTemplateExpression = false;
+    i += 1;
+    while (i < source.length) {
+      const ch = source[i];
+      if (escaped) {
+        raw += `\\${ch}`;
+        escaped = false;
+        i += 1;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        i += 1;
+        continue;
+      }
+      if (quote === '`' && ch === '$' && source[i + 1] === '{') hasTemplateExpression = true;
+      if (ch === quote) {
+        i += 1;
+        break;
+      }
+      raw += ch;
+      i += 1;
+    }
+    if (!hasTemplateExpression) values.push(decodeJavaScriptEscapes(raw));
+  }
+  return values;
+}
+
+function matchingArrayEnd(source: string, start: number): number {
+  if (source[start] !== '[') return -1;
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '[') depth += 1;
+    if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function assignedJavaScriptArrays(source: string): Array<{ name: string; values: string[] }> {
+  const arrays: Array<{ name: string; values: string[] }> = [];
+  const assignment = /(?:\b(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*\[/g;
+  let match: RegExpExecArray | null;
+  while ((match = assignment.exec(source))) {
+    const open = source.indexOf('[', match.index + match[0].length - 1);
+    if (open < 0) continue;
+    const close = matchingArrayEnd(source, open);
+    if (close < 0) continue;
+    const values = stringLiteralsFromJavaScript(source.slice(open + 1, close));
+    if (values.length) arrays.push({ name: match[1], values });
+    assignment.lastIndex = close + 1;
+  }
+  return arrays;
+}
+
 export class MangaKatanaProvider implements MangaProvider {
   readonly key = 'mangakatana';
   readonly displayName = 'MangaKatana';
@@ -316,49 +415,106 @@ export class MangaKatanaProvider implements MangaProvider {
   async getChapterPages(chapterId: string): Promise<ProviderChapterPagesResponse> {
     const relative = this.chapterPath(chapterId);
     const { html } = await this.fetchPage(relative);
-    const pages: string[] = [];
-    const seen = new Set<string>();
-    const add = (raw?: string) => {
+    const domPages: string[] = [];
+    const domSeen = new Set<string>();
+    const addDom = (raw?: string) => {
       const url = this.rememberImage(raw);
-      if (url && !seen.has(url)) {
-        seen.add(url);
-        pages.push(url);
+      if (url && !domSeen.has(url)) {
+        domSeen.add(url);
+        domPages.push(url);
       }
     };
 
-    // Current MangaKatana reader exposes one lazy image inside each #page*
-    // node under #imgs. Parse these first and accept the explicit lazy URL even
-    // when the CDN URL has no conventional image extension.
+    // MangaKatana can render only the first page in the server HTML and build
+    // the rest of #imgs in JavaScript. Collect every explicit #page* image we
+    // can see, but do not stop after finding the first one.
     const pageNodeRegex = /<div\b[^>]*id\s*=\s*(["'])page[^"']*\1[^>]*>[\s\S]*?<img\b[^>]*>/gi;
     let pageNodeMatch: RegExpExecArray | null;
     while ((pageNodeMatch = pageNodeRegex.exec(html))) {
       const tagMatch = /<img\b[^>]*>/i.exec(pageNodeMatch[0]);
       if (!tagMatch) continue;
-      add(getAttr(tagMatch[0], 'data-src') || getAttr(tagMatch[0], 'data-original') || getAttr(tagMatch[0], 'src'));
+      addDom(getAttr(tagMatch[0], 'data-src') || getAttr(tagMatch[0], 'data-original') || getAttr(tagMatch[0], 'src'));
     }
 
-    // Fallback for reader variants that still expose #imgs but use a different
-    // page wrapper. Keep extension filtering here so logos/icons elsewhere in
-    // the HTML cannot be mistaken for manga pages.
-    const imgsBlockMatch = /<[^>]+id\s*=\s*(["'])imgs\1[^>]*>([\s\S]*?)(?:<\/[^>]+>\s*<script|<\/body>)/i.exec(html);
-    const imageScope = imgsBlockMatch ? imgsBlockMatch[2] : html;
-    const imageRegex = /<img\b[^>]*>/gi;
-    let match: RegExpExecArray | null;
-    if (!pages.length) {
-      while ((match = imageRegex.exec(imageScope))) {
-        const tag = match[0];
-        const raw = getAttr(tag, 'data-src') || getAttr(tag, 'data-original') || getAttr(tag, 'src');
-        if (raw && /\.(?:jpe?g|png|webp|avif)(?:[?#]|$)/i.test(raw)) add(raw);
+    // Also scan the reader block even when one page was already found. The old
+    // implementation only entered this branch when pages.length === 0, which
+    // is why a chapter whose HTML contained one eager image was truncated to a
+    // single page.
+    const imgsBlockMatch = /<[^>]+id\s*=\s*(["'])imgs\1[^>]*>([\s\S]*?)(?:<\/body>|<script\b)/i.exec(html);
+    const imageScope = imgsBlockMatch ? imgsBlockMatch[2] : '';
+    if (imageScope) {
+      const imageRegex = /<img\b[^>]*>/gi;
+      let imageMatch: RegExpExecArray | null;
+      while ((imageMatch = imageRegex.exec(imageScope))) {
+        const tag = imageMatch[0];
+        const raw = getAttr(tag, 'data-src') || getAttr(tag, 'data-original') || getAttr(tag, 'data-lazy-src') || getAttr(tag, 'src');
+        if (raw) addDom(raw);
       }
     }
 
-    // Older templates put image URLs in JavaScript arrays. Keep this fallback
-    // for the agent behavior used by KamiYomu and for server variants where the
-    // #imgs DOM is populated by script after page load.
+    // The current reader frequently carries the full chapter as a JavaScript
+    // array whose variable name is not stable. Parse every assigned array,
+    // normalize URL-like strings, and choose the strongest page-list candidate
+    // instead of assuming a hard-coded variable name.
+    const preferredHost = (() => {
+      try { return domPages.length ? new URL(domPages[0]).hostname.toLowerCase() : ''; } catch (_error) { return ''; }
+    })();
+    const scriptRegex = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+    const arrayCandidates: Array<{ urls: string[]; score: number }> = [];
+    let scriptMatch: RegExpExecArray | null;
+    while ((scriptMatch = scriptRegex.exec(html))) {
+      const script = scriptMatch[1];
+      assignedJavaScriptArrays(script).forEach((entry) => {
+        const urls: string[] = [];
+        const seen = new Set<string>();
+        let imageLike = 0;
+        let preferred = 0;
+        entry.values.forEach((rawValue) => {
+          const value = decodeJavaScriptEscapes(rawValue).trim();
+          if (!value || !/^(?:https?:)?\/\//i.test(value)) return;
+          if (/\.(?:js|css|svg|ico|woff2?|ttf|eot)(?:[?#]|$)/i.test(value)) return;
+          const url = this.rememberImage(value.indexOf('//') === 0 ? `https:${value}` : value);
+          if (!url || seen.has(url)) return;
+          seen.add(url);
+          urls.push(url);
+          if (/\.(?:jpe?g|png|webp|avif|gif)(?:[?#]|$)/i.test(url)) imageLike += 1;
+          try {
+            if (preferredHost && new URL(url).hostname.toLowerCase() === preferredHost) preferred += 1;
+          } catch (_error) {}
+        });
+        if (urls.length >= 2) {
+          const sameHostBonus = preferredHost && preferred === urls.length ? 10000 : preferred * 100;
+          const nameBonus = /(?:img|image|page|src|chapter)/i.test(entry.name) ? 500 : 0;
+          arrayCandidates.push({ urls, score: sameHostBonus + nameBonus + imageLike * 20 + urls.length });
+        }
+      });
+    }
+
+    arrayCandidates.sort((a, b) => b.score - a.score || b.urls.length - a.urls.length);
+    const scriptPages = arrayCandidates.length ? arrayCandidates[0].urls : [];
+
+    // Prefer the JavaScript list when it is longer. This preserves page order
+    // exactly as MangaKatana sends it and avoids mixing alternate image servers
+    // into one chapter. If no suitable array exists, use all DOM pages found.
+    let pages = scriptPages.length > domPages.length ? scriptPages : domPages;
+
+    // Last-resort extraction for older templates that contain quoted page URLs
+    // but no normal assignment expression. Only use it when both structured
+    // methods failed, otherwise unrelated assets could pollute the chapter.
     if (!pages.length) {
-      const normalizedScript = html.replace(/\\\//g, '/').replace(/\\u0026/gi, '&');
-      const urlRegex = /https?:\/\/[^"'\s,\]]+?\.(?:jpe?g|png|webp|avif)(?:\?[^"'\s,\]]*)?/gi;
-      while ((match = urlRegex.exec(normalizedScript))) add(match[0]);
+      const fallbackPages: string[] = [];
+      const fallbackSeen = new Set<string>();
+      const normalizedScript = decodeJavaScriptEscapes(html);
+      const urlRegex = /https?:\/\/[^"'`\s,\]]+?(?:\.(?:jpe?g|png|webp|avif|gif)(?:\?[^"'`\s,\]]*)?|\/[^"'`\s,\]]*image[^"'`\s,\]]*)/gi;
+      let match: RegExpExecArray | null;
+      while ((match = urlRegex.exec(normalizedScript))) {
+        const url = this.rememberImage(match[0]);
+        if (url && !fallbackSeen.has(url)) {
+          fallbackSeen.add(url);
+          fallbackPages.push(url);
+        }
+      }
+      pages = fallbackPages;
     }
 
     if (!pages.length) throw new Error(`MangaKatana returned no chapter images for ${chapterId}`);

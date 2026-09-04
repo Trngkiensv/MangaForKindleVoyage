@@ -59,8 +59,24 @@ function queryParamsFromExpress(query: express.Request['query']): URLSearchParam
 }
 
 function providerForRequest(req: express.Request) {
-  const requested = typeof req.query.provider === 'string' ? req.query.provider : undefined;
-  return getProvider(requested);
+  const requested = typeof req.query.provider === 'string' ? req.query.provider.trim() : '';
+  if (!requested) {
+    const error: any = new Error('provider query parameter is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  try {
+    return getProvider(requested);
+  } catch (cause: any) {
+    const error: any = new Error(cause?.message || 'Unknown manga provider');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function providerErrorStatus(error: any, fallback = 502): number {
+  const status = Number(error?.statusCode || 0);
+  return status >= 400 && status <= 599 ? status : fallback;
 }
 
 const SESSION_COOKIE = 'manga_session';
@@ -268,7 +284,7 @@ app.get('/api/reading/progress/:chapterId', async (req, res) => {
     return res.json({ item });
   } catch (error: any) {
     console.error('Reading progress load error:', error);
-    return res.status(500).json({ error: 'Could not load reading progress' });
+    return res.status(providerErrorStatus(error, 500)).json({ error: error?.message || 'Could not load reading progress' });
   }
 });
 
@@ -296,7 +312,7 @@ app.post('/api/reading/read-chapters', async (req, res) => {
     return res.json({ chapterIds });
   } catch (error: any) {
     console.error('Read chapter marker error:', error);
-    return res.status(500).json({ error: 'Could not load read chapter markers' });
+    return res.status(providerErrorStatus(error, 500)).json({ error: error?.message || 'Could not load read chapter markers' });
   }
 });
 
@@ -336,7 +352,7 @@ app.post('/api/reading/saved/check-many', async (req, res) => {
     return res.json({ savedIds });
   } catch (error: any) {
     console.error('Saved manga batch check error:', error);
-    return res.status(500).json({ error: 'Could not check saved manga' });
+    return res.status(providerErrorStatus(error, 500)).json({ error: error?.message || 'Could not check saved manga' });
   }
 });
 
@@ -349,7 +365,7 @@ app.get('/api/reading/saved/check/:mangaId', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ saved });
   } catch (error: any) {
-    return res.status(500).json({ error: 'Could not check saved manga' });
+    return res.status(providerErrorStatus(error, 500)).json({ error: error?.message || 'Could not check saved manga' });
   }
 });
 
@@ -378,7 +394,7 @@ app.delete('/api/reading/saved/:mangaId', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ ok: true, saved: false });
   } catch (error: any) {
-    return res.status(500).json({ error: 'Could not remove saved manga' });
+    return res.status(providerErrorStatus(error, 500)).json({ error: error?.message || 'Could not remove saved manga' });
   }
 });
 
@@ -506,7 +522,7 @@ app.get('/api/provider/search', async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error('Provider search error:', error);
-    res.status(502).json({ error: error?.message || String(error) });
+    res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -539,7 +555,7 @@ app.get('/api/provider/random', async (req, res) => {
     return res.json({ data: data.slice(0, requested), total: data.length, limit: requested });
   } catch (error: any) {
     console.error('Random manga error:', error);
-    return res.status(502).json({ error: 'Could not load random manga' });
+    return res.status(providerErrorStatus(error)).json({ error: error?.message || 'Could not load random manga' });
   }
 });
 
@@ -551,7 +567,7 @@ app.get('/api/provider/manga/:id', async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error('Provider manga error:', error);
-    res.status(502).json({ error: error?.message || String(error) });
+    res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -565,7 +581,7 @@ app.get('/api/provider/manga/:id/chapters', async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error('Provider chapters error:', error);
-    res.status(502).json({ error: error?.message || String(error) });
+    res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -577,7 +593,7 @@ app.get('/api/provider/chapter/:id', async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error('Provider chapter error:', error);
-    res.status(502).json({ error: error?.message || String(error) });
+    res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -589,7 +605,7 @@ app.get('/api/provider/chapter/:id/pages', async (req, res) => {
     res.json(data);
   } catch (error: any) {
     console.error('Provider pages error:', error);
-    res.status(502).json({ error: error?.message || String(error) });
+    res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -613,7 +629,7 @@ app.post('/api/translation/text', async (req, res) => {
     return res.json(result);
   } catch (error: any) {
     console.error('Selected text translation error:', error);
-    return res.status(502).json({ error: error?.message || String(error) });
+    return res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -631,7 +647,7 @@ app.get('/api/translation/chapter/:id/page/:page', async (req, res) => {
     return res.json({ ...data, page: pageNumber });
   } catch (error: any) {
     console.error('Translation page error:', error);
-    return res.status(502).json({ error: error?.message || String(error) });
+    return res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -674,7 +690,7 @@ app.get('/api/translation/chapter/:id/prefetch', async (req, res) => {
     return res.json({ ok: true, queued, cancelled, fromPage, ahead });
   } catch (error: any) {
     console.error('Translation prefetch error:', error);
-    return res.status(502).json({ error: error?.message || String(error) });
+    return res.status(providerErrorStatus(error)).json({ error: error?.message || String(error) });
   }
 });
 
@@ -715,7 +731,12 @@ app.get('/api/mangadex/*', async (req, res) => {
 // can opt in only the exact CDN domains it is permitted to fetch.
 app.get('/api/image-proxy', async (req, res) => {
   const imageUrl = typeof req.query.url === 'string' ? req.query.url : '';
-  const provider = providerForRequest(req);
+  let provider: MangaProvider;
+  try {
+    provider = providerForRequest(req);
+  } catch (error: any) {
+    return res.status(providerErrorStatus(error, 400)).json({ error: error?.message || 'Invalid provider' });
+  }
 
   let parsed: URL;
   try {
