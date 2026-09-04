@@ -510,6 +510,93 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Render Free does not provide shell access, so these fixed-target debug routes let us
+// verify MangaFire connectivity from the same Node.js process/IP as the deployed app.
+// They never accept an arbitrary upstream URL.
+app.get('/api/debug/mangafire', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!allowRate(`debug-mangafire-home:${clientIp(req)}`, 10, 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many MangaFire debug requests. Try again in a minute.' });
+  }
+
+  const target = 'https://mangafire.to/';
+  try {
+    const response = await fetch(target, {
+      redirect: 'follow',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.8',
+      },
+    });
+    const text = await response.text();
+    return res.status(response.ok ? 200 : response.status).json({
+      ok: response.ok,
+      test: 'homepage',
+      target,
+      status: response.status,
+      statusText: response.statusText,
+      finalUrl: response.url,
+      server: response.headers.get('server'),
+      cfRay: response.headers.get('cf-ray'),
+      cfCacheStatus: response.headers.get('cf-cache-status'),
+      contentType: response.headers.get('content-type'),
+      preview: text.slice(0, 500).replace(/\s+/g, ' ').trim(),
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('MangaFire homepage debug error:', error);
+    return res.status(502).json({
+      ok: false,
+      test: 'homepage',
+      target,
+      error: error?.message || String(error),
+      checkedAt: new Date().toISOString(),
+    });
+  }
+});
+
+// This second endpoint exercises the exact MangaFireProvider search path used by the app,
+// including the current VRF signing logic and MangaFire API request headers.
+app.get('/api/debug/mangafire/search', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!allowRate(`debug-mangafire-search:${clientIp(req)}`, 10, 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many MangaFire debug requests. Try again in a minute.' });
+  }
+
+  const title = String(req.query.q || 'naruto').trim().slice(0, 80) || 'naruto';
+  try {
+    const provider = getProvider('mangafire');
+    const params = new URLSearchParams({
+      title,
+      limit: '3',
+      offset: '0',
+    });
+    const result = await provider.search(params);
+    return res.json({
+      ok: true,
+      test: 'provider-search',
+      provider: provider.key,
+      title,
+      resultCount: Array.isArray(result.data) ? result.data.length : 0,
+      total: result.total,
+      sample: Array.isArray(result.data) ? result.data.slice(0, 3) : [],
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    console.error('MangaFire provider debug error:', error);
+    return res.status(providerErrorStatus(error)).json({
+      ok: false,
+      test: 'provider-search',
+      provider: 'mangafire',
+      title,
+      error: error?.message || String(error),
+      checkedAt: new Date().toISOString(),
+    });
+  }
+});
+
 // Provider-neutral API inspired by manga-tui's MangaProvider architecture:
 // search -> manga -> chapters -> chapter pages.
 app.get('/api/provider/search', async (req, res) => {
