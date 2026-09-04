@@ -1,5 +1,13 @@
 # Kindle Voyage ES5 v3
 
+## Voyage ES5 v35 Fit Page frame height
+
+- Fit Page still uses the visible Kindle viewport as the maximum image height.
+- The manga frame now follows the actual fitted image height instead of always reserving the full device viewport height.
+- Kindle viewport height detection prefers the smallest sane viewport/screen measurement to avoid old WebKit reporting an oversized layout height.
+- Fit Width and Zoom behavior are unchanged.
+
+
 This build keeps the Kindle UI in plain ES5 + XMLHttpRequest for compatibility with the Kindle Voyage browser.
 
 ## Voyage ES5 v32 multi-provider

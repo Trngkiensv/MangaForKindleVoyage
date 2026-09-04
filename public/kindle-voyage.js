@@ -1707,13 +1707,26 @@
     }
 
     function viewportHeight() {
-        return (
-            window.innerHeight ||
-            document.documentElement.clientHeight ||
-            document.body.clientHeight ||
-            (window.screen ? screen.height : 1000) ||
-            1000
-        );
+        var candidates = [];
+        var best = 0;
+        var i, value;
+
+        // Old Kindle WebKit can report the layout viewport differently from the
+        // physical screen. Use the smallest sane viewport-like measurement so
+        // browser chrome or a full-device height cannot make Fit Page too tall.
+        if (window.innerHeight) candidates.push(window.innerHeight);
+        if (document.documentElement && document.documentElement.clientHeight)
+            candidates.push(document.documentElement.clientHeight);
+        if (window.screen && screen.availHeight) candidates.push(screen.availHeight);
+        if (window.screen && screen.height) candidates.push(screen.height);
+
+        for (i = 0; i < candidates.length; i += 1) {
+            value = Number(candidates[i]) || 0;
+            if (value >= 200 && (!best || value < best)) best = value;
+        }
+
+        if (best) return best;
+        return (document.body && document.body.clientHeight) || 800;
     }
 
     function applyReaderFit() {
@@ -1756,7 +1769,6 @@
                     Math.floor(((contentW - 2) * state.zoomPercent) / 100)
                 ) + "px";
         } else {
-            frame.style.height = availableH + "px";
             frame.style.overflow = "hidden";
             naturalW = img.naturalWidth || img.width || 0;
             naturalH = img.naturalHeight || img.height || 0;
@@ -1766,7 +1778,15 @@
                 targetH = Math.max(1, Math.floor(naturalH * scale));
                 img.style.width = targetW + "px";
                 img.style.height = targetH + "px";
+
+                // The viewport height is only a cap for Fit Page. The frame must
+                // follow the fitted manga page itself; otherwise a width-limited
+                // page leaves a tall empty frame on Kindle Voyage.
+                frame.style.height = targetH + "px";
             } else {
+                // While the next image is still loading, do not reserve the whole
+                // device height. onload runs applyReaderFit() again with real size.
+                frame.style.height = "auto";
                 img.style.width = Math.max(100, contentW - 2) + "px";
             }
         }
