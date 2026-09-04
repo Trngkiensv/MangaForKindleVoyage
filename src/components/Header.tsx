@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { BookMarked, History, Search, Settings, RefreshCw, Feather, BookOpen, Globe } from 'lucide-react';
 import { ReaderSettings } from '../types';
-import type { ProviderKey } from '../services/provider';
-import { PROVIDER_OPTIONS } from '../services/provider';
 
 interface HeaderProps {
   settings: ReaderSettings;
@@ -13,8 +11,6 @@ interface HeaderProps {
   onOpenHistory: () => void;
   onGoHome: () => void;
   currentView: string;
-  activeProvider: ProviderKey;
-  onCycleProvider: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,8 +22,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHistory,
   onGoHome,
   currentView,
-  activeProvider,
-  onCycleProvider,
 }) => {
   const [searchInput, setSearchInput] = useState('');
 
@@ -121,22 +115,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 text-xs font-sans">
-          {/* Provider switcher */}
-          <button
-            id="btn-cycle-provider"
-            onClick={onCycleProvider}
-            title="Switch manga provider"
-            className={`p-1.5 px-2.5 flex items-center gap-1.5 font-black uppercase cursor-pointer ${
-              isEink
-                ? 'bg-white text-black border-2 border-black hover:bg-black hover:text-white'
-                : 'bg-stone-800 hover:bg-stone-700 text-stone-200 rounded border border-stone-700'
-            }`}
-          >
-            <Globe size={14} />
-            <span>
-              {PROVIDER_OPTIONS.find((item) => item.key === activeProvider)?.label || activeProvider}
-            </span>
-          </button>
           {/* Refresh Screen for E-ink */}
           <button
             id="btn-flash-refresh"

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chapter, ChapterPagesResponse, Manga, ReaderSettings } from '../types';
-import { formatChapterName, getActiveProvider, getChapterById, getChapterPages, getMangaById, proxyImageUrl } from '../services/provider';
+import { formatChapterName, getChapterById, getChapterPages, getMangaById, proxyImageUrl } from '../services/provider';
 import { saveHistoryItem } from '../services/storage';
 import {
   ArrowLeft,
@@ -126,7 +126,6 @@ export const MangaReader: React.FC<MangaReaderProps> = ({
       const chNum = currentChapter.attributes?.chapter || currentChapter.attributes?.volume || '1';
 
       saveHistoryItem({
-        provider: getActiveProvider(),
         mangaId,
         mangaTitle: manga?.attributes?.title?.en || manga?.attributes?.title?.vi || 'Manga',
         coverUrl: null,

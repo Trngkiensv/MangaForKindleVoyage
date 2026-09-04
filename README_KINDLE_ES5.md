@@ -2,6 +2,11 @@
 
 This build keeps the Kindle UI in plain ES5 + XMLHttpRequest for compatibility with the Kindle Voyage browser.
 
+## Voyage ES5 v32 multi-provider
+
+The Kindle top bar now has three explicit source buttons: `WeebCentral`, `MangaFire`, and `MangaKatana`. The selected source is a tiny local reader setting; every manga/chapter/image/progress/Saved request includes that provider key so server-side Neon rows never collide across sources. Manga content and reading history remain server-side.
+
+
 ## New in v3
 
 - Simplified chapter list: no translator/source-group or language selector.

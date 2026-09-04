@@ -319,12 +319,14 @@ export class EnglishVietnameseTranslationService {
   private pending = new Map<string, Promise<TranslatedPage>>();
   private prefetchQueue: Array<{
     key: string;
+    providerKey: string;
     chapterId: string;
     pageIndex: number;
     run: () => Promise<void>;
   }> = [];
   private queuedPrefetchKeys = new Set<string>();
   private prefetchRunning = false;
+  private activePrefetchProviderKey = '';
   private activePrefetchChapterId = '';
   private activePrefetchPageIndex = -1;
 
@@ -896,6 +898,7 @@ export class EnglishVietnameseTranslationService {
     this.queuedPrefetchKeys.add(key);
     this.prefetchQueue.push({
       key,
+      providerKey: context.provider.key,
       chapterId: context.chapterId,
       pageIndex: context.pageIndex,
       run: async () => {
@@ -912,12 +915,14 @@ export class EnglishVietnameseTranslationService {
     void this.runPrefetchQueue();
   }
 
-  cancelPrefetch(chapterId?: string): { cancelled: number; active: boolean; activePage?: number } {
+  cancelPrefetch(chapterId?: string, providerKey?: string): { cancelled: number; active: boolean; activePage?: number } {
     const target = String(chapterId || '');
+    const providerTarget = String(providerKey || '');
     let cancelled = 0;
     const kept: typeof this.prefetchQueue = [];
     for (const task of this.prefetchQueue) {
-      if (!target || task.chapterId === target) {
+      const providerMatches = !providerTarget || task.providerKey === providerTarget;
+      if ((!target || task.chapterId === target) && providerMatches) {
         this.queuedPrefetchKeys.delete(task.key);
         cancelled += 1;
       } else {
@@ -925,7 +930,7 @@ export class EnglishVietnameseTranslationService {
       }
     }
     this.prefetchQueue = kept;
-    const active = !!target && this.activePrefetchChapterId === target;
+    const active = !!target && this.activePrefetchChapterId === target && (!providerTarget || this.activePrefetchProviderKey === providerTarget);
     return {
       cancelled,
       active,
@@ -940,18 +945,21 @@ export class EnglishVietnameseTranslationService {
       while (this.prefetchQueue.length) {
         const task = this.prefetchQueue.shift();
         if (!task) continue;
+        this.activePrefetchProviderKey = task.providerKey;
         this.activePrefetchChapterId = task.chapterId;
         this.activePrefetchPageIndex = task.pageIndex;
         try {
           await task.run();
         } finally {
           this.queuedPrefetchKeys.delete(task.key);
+          this.activePrefetchProviderKey = '';
           this.activePrefetchChapterId = '';
           this.activePrefetchPageIndex = -1;
         }
       }
     } finally {
       this.prefetchRunning = false;
+      this.activePrefetchProviderKey = '';
       this.activePrefetchChapterId = '';
       this.activePrefetchPageIndex = -1;
     }

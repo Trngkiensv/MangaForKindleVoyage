@@ -101,7 +101,6 @@ export interface ReaderSettings {
 }
 
 export interface Bookmark {
-  provider?: string;
   mangaId: string;
   title: string;
   coverUrl: string | null;
@@ -109,7 +108,6 @@ export interface Bookmark {
 }
 
 export interface ReadingHistoryItem {
-  provider?: string;
   mangaId: string;
   mangaTitle: string;
   coverUrl: string | null;

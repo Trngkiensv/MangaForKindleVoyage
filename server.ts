@@ -1,9 +1,8 @@
 import express from 'express';
-import https from 'https';
 import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
-import { getFallbackProvider, getProvider, listProviders } from './providers/registry';
+import { getProvider, listProviders } from './providers/registry';
 import type { MangaProvider, ProviderChapterPagesResponse } from './providers/types';
 import { EnglishVietnameseTranslationService } from './translation/ocrspace-cloudflare-en-vi';
 import { getDriveBookAsset, getDriveBookPage, getParsedDriveBook, googleBooksConfigured } from './books-drive';
@@ -62,19 +61,6 @@ function queryParamsFromExpress(query: express.Request['query']): URLSearchParam
 function providerForRequest(req: express.Request) {
   const requested = typeof req.query.provider === 'string' ? req.query.provider : undefined;
   return getProvider(requested);
-}
-
-async function searchWithDiscoveryFallback(provider: MangaProvider, params: URLSearchParams) {
-  try {
-    const data = await provider.search(params);
-    return { data, providerUsed: provider.key, fallbackFrom: null as string | null };
-  } catch (error) {
-    const fallback = getFallbackProvider(provider);
-    if (!fallback) throw error;
-    console.warn(`Provider ${provider.key} discovery failed; falling back to ${fallback.key}:`, error);
-    const data = await fallback.search(params);
-    return { data, providerUsed: fallback.key, fallbackFrom: provider.key };
-  }
 }
 
 const SESSION_COOKIE = 'manga_session';
@@ -515,9 +501,9 @@ app.get('/api/provider/search', async (req, res) => {
     const provider = providerForRequest(req);
     const params = queryParamsFromExpress(req.query);
     params.delete('provider');
-    const result = await searchWithDiscoveryFallback(provider, params);
+    const data = await provider.search(params);
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json({ ...result.data, providerUsed: result.providerUsed, fallbackFrom: result.fallbackFrom });
+    res.json(data);
   } catch (error: any) {
     console.error('Provider search error:', error);
     res.status(502).json({ error: error?.message || String(error) });
@@ -526,12 +512,12 @@ app.get('/api/provider/search', async (req, res) => {
 
 app.get('/api/provider/random', async (req, res) => {
   try {
-    let provider = providerForRequest(req);
-    const requestedProvider = provider.key;
+    const provider = providerForRequest(req);
     const requested = Math.max(1, Math.min(10, parseInt(String(req.query.limit || '10'), 10) || 10));
     const pageSize = 24;
     let data: any[] = [];
-    let fallbackFrom: string | null = null;
+    // Sample from a different provider search page on every press, then
+    // shuffle locally. Retry a shallower page if the sampled offset is empty.
     for (let attempt = 0; attempt < 3 && data.length < requested; attempt += 1) {
       const page = attempt === 2 ? 0 : Math.floor(Math.random() * 16);
       const params = new URLSearchParams();
@@ -540,12 +526,8 @@ app.get('/api/provider/random', async (req, res) => {
       params.append('contentRating[]', 'safe');
       params.append('contentRating[]', 'suggestive');
       params.append('includes[]', 'cover_art');
-      const result = await searchWithDiscoveryFallback(provider, params);
-      if (result.providerUsed !== provider.key) {
-        fallbackFrom = provider.key;
-        provider = getProvider(result.providerUsed);
-      }
-      data = result.data.data || [];
+      const result = await provider.search(params);
+      data = result.data || [];
     }
     for (let i = data.length - 1; i > 0; i -= 1) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -554,16 +536,10 @@ app.get('/api/provider/random', async (req, res) => {
       data[j] = tmp;
     }
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({
-      data: data.slice(0, requested),
-      total: data.length,
-      limit: requested,
-      providerUsed: provider.key,
-      fallbackFrom: fallbackFrom || (provider.key !== requestedProvider ? requestedProvider : null),
-    });
+    return res.json({ data: data.slice(0, requested), total: data.length, limit: requested });
   } catch (error: any) {
     console.error('Random manga error:', error);
-    return res.status(502).json({ error: error?.message || 'Could not load random manga' });
+    return res.status(502).json({ error: 'Could not load random manga' });
   }
 });
 
@@ -661,7 +637,8 @@ app.get('/api/translation/chapter/:id/page/:page', async (req, res) => {
 
 app.get('/api/translation/chapter/:id/cancel-prefetch', async (req, res) => {
   try {
-    const result = translationService.cancelPrefetch(req.params.id);
+    const provider = providerForRequest(req);
+    const result = translationService.cancelPrefetch(req.params.id, provider.key);
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ ok: true, ...result });
   } catch (error: any) {
@@ -683,7 +660,7 @@ app.get('/api/translation/chapter/:id/prefetch', async (req, res) => {
     const pages = await getCachedChapterPages(provider, req.params.id);
     const pageList = pages.pages && pages.pages.length ? pages.pages : pages.dataSaverPages || [];
     const replaceQueued = String(req.query.replace || '') === '1';
-    const cancelled = replaceQueued ? translationService.cancelPrefetch(req.params.id).cancelled : 0;
+    const cancelled = replaceQueued ? translationService.cancelPrefetch(req.params.id, provider.key).cancelled : 0;
     let queued = 0;
     // `ahead` is the number of pages to queue starting at `fromPage`.
     for (let pageNumber = fromPage; pageNumber < Math.min(pageList.length + 1, fromPage + ahead); pageNumber += 1) {
@@ -733,68 +710,6 @@ app.get('/api/mangadex/*', async (req, res) => {
   }
 });
 
-type BinaryFetchResult = {
-  status: number;
-  headers: Record<string, string | string[] | undefined>;
-  buffer: Buffer;
-};
-
-function fetchBinaryWithHeaders(
-  urlString: string,
-  headers: Record<string, string>,
-  redirects = 0,
-): Promise<BinaryFetchResult> {
-  return new Promise((resolve, reject) => {
-    let parsed: URL;
-    try {
-      parsed = new URL(urlString);
-    } catch (error) {
-      reject(error);
-      return;
-    }
-    if (parsed.protocol !== 'https:') {
-      reject(new Error('Only HTTPS image URLs are supported'));
-      return;
-    }
-
-    const request = https.request(
-      {
-        protocol: parsed.protocol,
-        hostname: parsed.hostname,
-        port: parsed.port || 443,
-        path: `${parsed.pathname}${parsed.search}`,
-        method: 'GET',
-        headers,
-        servername: parsed.hostname,
-        timeout: 30000,
-      },
-      (response) => {
-        const status = response.statusCode || 0;
-        const location = response.headers.location;
-        if (status >= 300 && status < 400 && location && redirects < 3) {
-          response.resume();
-          const nextUrl = new URL(location, parsed).toString();
-          fetchBinaryWithHeaders(nextUrl, headers, redirects + 1).then(resolve, reject);
-          return;
-        }
-
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        response.on('end', () => {
-          resolve({
-            status,
-            headers: response.headers as Record<string, string | string[] | undefined>,
-            buffer: Buffer.concat(chunks),
-          });
-        });
-      },
-    );
-    request.on('timeout', () => request.destroy(new Error('Image upstream timed out')));
-    request.on('error', reject);
-    request.end();
-  });
-}
-
 // Image proxy: the Kindle talks HTTP to this PC; the PC downloads HTTPS images.
 // Host validation is delegated to the active provider so a future authorized scraper
 // can opt in only the exact CDN domains it is permitted to fetch.
@@ -817,27 +732,21 @@ app.get('/api/image-proxy', async (req, res) => {
     const providerHeaders = provider.getImageRequestHeaders
       ? provider.getImageRequestHeaders(parsed)
       : {};
-    // Native https.request is intentional here. Node's fetch implementation
-    // rewrites the Host header to the CDN hostname, while MangaPill's image CDN
-    // expects Host: mangapill.com together with the MangaPill Referer.
-    const upstream = await fetchBinaryWithHeaders(imageUrl, {
-      'User-Agent': 'KindleVoyageMangaReader/3.1.2 (image proxy)',
-      Accept: 'image/jpeg,image/png,image/webp,image/avif,image/*;q=0.8,*/*;q=0.5',
-      ...providerHeaders,
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'KindleVoyageMangaReader/3.1 (image proxy)',
+        Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
+        ...providerHeaders,
+      },
     });
 
-    if (upstream.status < 200 || upstream.status >= 300) {
-      console.warn(`Image upstream failed: provider=${provider.key} host=${parsed.hostname} status=${upstream.status}`);
-      return res.status(upstream.status || 502).send('Image fetch failed');
+    if (!response.ok) {
+      return res.status(response.status).send('Image fetch failed');
     }
 
-    const rawContentType = upstream.headers['content-type'];
-    const contentType = Array.isArray(rawContentType) ? rawContentType[0] : rawContentType || 'image/jpeg';
-    const sourceBuffer = upstream.buffer;
-    if (!String(contentType).toLowerCase().startsWith('image/')) {
-      console.warn(`Image upstream returned non-image content: provider=${provider.key} host=${parsed.hostname} content-type=${contentType}`);
-      return res.status(502).send('Upstream did not return an image');
-    }
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const arrayBuffer = await response.arrayBuffer();
+    const sourceBuffer = Buffer.from(arrayBuffer);
     const kindleCover = String(req.query.kindle || '').toLowerCase() === 'cover';
 
     if (kindleCover) {

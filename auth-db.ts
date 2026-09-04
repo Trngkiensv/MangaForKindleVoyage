@@ -182,27 +182,6 @@ export async function initAuthDatabase() {
       );
       CREATE INDEX IF NOT EXISTS saved_manga_user_idx ON saved_manga(user_id, created_at DESC);
 
-      -- Multi-provider migration: older installs may predate provider-aware
-      -- history/saved records. Existing records belong to the original
-      -- WeebCentral source, while new MangaPill records remain independent.
-      ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS provider VARCHAR(40);
-      UPDATE reading_progress SET provider = 'weebcentral' WHERE provider IS NULL OR BTRIM(provider) = '';
-      ALTER TABLE reading_progress ALTER COLUMN provider SET DEFAULT 'weebcentral';
-      ALTER TABLE reading_progress ALTER COLUMN provider SET NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS reading_progress_provider_chapter_uq
-        ON reading_progress(user_id, provider, chapter_id);
-      CREATE INDEX IF NOT EXISTS reading_progress_provider_history_idx
-        ON reading_progress(user_id, provider, updated_at DESC);
-
-      ALTER TABLE saved_manga ADD COLUMN IF NOT EXISTS provider VARCHAR(40);
-      UPDATE saved_manga SET provider = 'weebcentral' WHERE provider IS NULL OR BTRIM(provider) = '';
-      ALTER TABLE saved_manga ALTER COLUMN provider SET DEFAULT 'weebcentral';
-      ALTER TABLE saved_manga ALTER COLUMN provider SET NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS saved_manga_provider_manga_uq
-        ON saved_manga(user_id, provider, manga_id);
-      CREATE INDEX IF NOT EXISTS saved_manga_provider_created_idx
-        ON saved_manga(user_id, provider, created_at DESC);
-
       CREATE TABLE IF NOT EXISTS book_progress (
         user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
         drive_file_id TEXT NOT NULL,

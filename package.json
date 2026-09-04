@@ -1,7 +1,7 @@
 {
   "name": "kindle-voyage-manga-reader",
   "private": true,
-  "version": "3.3.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts --dev",
@@ -19,8 +19,7 @@
     "sharp": "^0.34.3",
     "whatwg-fetch": "^3.6.20",
     "@lingo-reader/epub-parser": "^0.4.6",
-    "@lingo-reader/mobi-parser": "^0.4.6",
-    "cheerio": "^1.1.2"
+    "@lingo-reader/mobi-parser": "^0.4.6"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",

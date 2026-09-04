@@ -7,20 +7,21 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Kindle Voyage Manga Reader</title>
-  <link rel="stylesheet" href="/kindle-voyage.css?v=33">
+  <link rel="stylesheet" href="/kindle-voyage.css?v=32">
 </head>
 <body>
   <div id="app">
     <div class="topbar">
       <div class="brand">Kindle Manga</div>
-      <div class="sub">Voyage ES5 v33 - Multi-provider + CrawlComic / TruyenQQ + books</div>
+      <div class="sub">Voyage ES5 v32 - WeebCentral + MangaFire + MangaKatana + books</div>
       <div class="row">
         <input id="search" class="searchbox" type="text" value="" placeholder="Manga title or supported ID">
         <button id="searchBtn" class="btn btn-dark" type="button">Search</button>
       </div>
-      <div class="row source-row">
-        <button id="sourceBtn" class="btn btn-source" type="button">Source: MangaPill</button>
-        <span class="source-note">Tap Source to switch: MangaPill → CrawlComic/TruyenQQ → WeebCentral → MangaDex.</span>
+      <div class="provider-nav">
+        <button id="providerWeebCentral" class="btn provider-btn" type="button">WeebCentral</button>
+        <button id="providerMangaFire" class="btn provider-btn" type="button">MangaFire</button>
+        <button id="providerMangaKatana" class="btn provider-btn" type="button">MangaKatana</button>
       </div>
       <div class="nav">
         <button id="homeBtn" class="btn" type="button">Home</button>
@@ -69,6 +70,6 @@
       }, 2500);
     }());
   </script>
-  <script type="text/javascript" src="/kindle-voyage.js?v=33"></script>
+  <script type="text/javascript" src="/kindle-voyage.js?v=32"></script>
 </body>
 </html>

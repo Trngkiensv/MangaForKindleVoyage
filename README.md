@@ -61,30 +61,30 @@ The test page checks HTML, old-style JavaScript, and the local API.
 
 ## Provider architecture (manga-tui style)
 
-The backend is provider-neutral. Built-in providers are MangaPill, CrawlComic / TruyenQQ, WeebCentral, and MangaDex. MangaPill remains the default source. The React header and Kindle Voyage ES5 interface both expose a source switcher that cycles through all four providers and stores the selected provider locally.
+The backend is provider-neutral. The Kindle UI talks to `/api/provider/...` and now exposes three explicit source buttons: **WeebCentral**, **MangaFire**, and **MangaKatana**. `MANGA_PROVIDER=weebcentral` remains the server default; the selected Kindle source is sent as a `provider=` query on every manga, chapter, image-proxy, Saved, History-progress, and translation request. MangaDex remains available as a backend compatibility provider but is not shown in the Voyage source buttons. `providers/html-provider-template.ts` remains the starting point for additional sources.
 
-`CrawlComicProvider` ports the TruyenQQ extraction approach from `minhduc1212/Crawl_Comic` into the shared provider contract. It uses the Crawl_Comic chapter/content selectors as its first choices, plus fallback selectors for the current TruyenQQ layout. The default site is `https://truyenqq.com.vn` and can be changed with `CRAWL_COMIC_BASE_URL`.
+See `providers/ADDING_PROVIDER.md` for the adapter contract.
 
-Discovery fallback is provider-aware: MangaPill can fall back to CrawlComic, CrawlComic can fall back to MangaPill, and WeebCentral can fall back to MangaPill. Manga/chapter/image requests keep the selected provider. Bookmarks, history, and reading progress are provider-scoped so IDs from different sources do not collide.
+### Provider-aware reading data
 
-See `providers/ADDING_PROVIDER.md` and `CRAWL_COMIC_PROVIDER.md` for details.
+Saved manga and manga progress are keyed by `provider` in Neon. Existing `weebcentral` rows remain unchanged; MangaFire and MangaKatana create separate rows even when their manga/chapter IDs happen to match another source. Book progress is independent of manga providers. No destructive database migration is required when the existing schema already contains the `provider` columns.
 
-## Choose the default provider
+## Use WeebCentral
 
 PowerShell:
 
 ```powershell
-$env:MANGA_PROVIDER="mangapill"
+$env:MANGA_PROVIDER="weebcentral"
 npm run dev
 ```
 
 macOS/Linux:
 
 ```bash
-MANGA_PROVIDER=mangapill npm run dev
+MANGA_PROVIDER=weebcentral npm run dev
 ```
 
-The server default can still be set with `MANGA_PROVIDER`, but either UI can override it per browser. Valid keys are `mangapill`, `crawlcomic`, `weebcentral`, and `mangadex`.
+The frontend remains provider-neutral; `MANGA_PROVIDER` controls the initial server default, while the three Kindle source buttons can switch providers without redeploying.
 
 ### Long-series performance
 
