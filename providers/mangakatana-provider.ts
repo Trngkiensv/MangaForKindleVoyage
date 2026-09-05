@@ -341,18 +341,34 @@ export class MangaKatanaProvider implements MangaProvider {
     const chapters: SimpleChapter[] = [];
     const seen = new Set<string>();
     const regex = /<a\b([^>]*)href\s*=\s*(["'])([^"']*\/manga\/[^"']+\/c[0-9.]+[^"']*)\2([^>]*)>([\s\S]*?)<\/a>/gi;
+    const normalizedMangaId = (() => {
+      try { return decodeURIComponent(mangaId).trim().toLowerCase(); } catch (_error) { return mangaId.trim().toLowerCase(); }
+    })();
     let match: RegExpExecArray | null;
     while ((match = regex.exec(html))) {
       const href = decodeHtml(match[3]);
-      const number = chapterNumberFromText(match[5], href);
-      if (!number) continue;
       let relative: string;
       try {
         const url = new URL(href, this.baseUrl);
+        const pathMatch = url.pathname.match(/^\/manga\/([^/]+)\/c([0-9]+(?:\.[0-9]+)?)(?:\/)?$/i);
+        if (!pathMatch) continue;
+
+        // MangaKatana detail pages also contain chapter links for recommended,
+        // latest and related series. The old parser accepted every /manga/*/c*
+        // link in the entire HTML document, so chapters from unrelated manga
+        // were merged into the selected title. Keep only links whose manga slug
+        // is exactly the manga currently being loaded.
+        let linkedMangaId = pathMatch[1];
+        try { linkedMangaId = decodeURIComponent(linkedMangaId); } catch (_error) {}
+        if (linkedMangaId.trim().toLowerCase() !== normalizedMangaId) continue;
+
         relative = url.pathname + url.search;
       } catch (_error) {
         continue;
       }
+
+      const number = chapterNumberFromText(match[5], href);
+      if (!number) continue;
       const id = encodeOpaque(relative);
       if (seen.has(id)) continue;
       seen.add(id);
