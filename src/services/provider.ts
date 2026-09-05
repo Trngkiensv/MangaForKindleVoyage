@@ -156,7 +156,7 @@ export async function getMangaFeed(
   const query: QueryPair[] = [];
   addPair(query, 'limit', limit);
   addPair(query, 'offset', offset);
-  addPair(query, 'order[chapter]', 'asc');
+  addPair(query, 'order[chapter]', 'desc');
   addPair(query, 'contentRating[]', 'safe');
   addPair(query, 'contentRating[]', 'suggestive');
   addPair(query, 'contentRating[]', 'erotica');
@@ -191,10 +191,17 @@ export function getCoverUrl(manga: Manga, size: '256' | '512' = '256'): string |
   const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
   if (!coverRel || !coverRel.attributes) return null;
 
+  const fileName = coverRel.attributes.fileName;
+
+  // For MangaDex, prefer its generated JPEG thumbnail instead of the original
+  // cover file. This is smaller and much safer for old Kindle WebKit.
+  if (activeProvider === 'mangadex' && fileName) {
+    const mangaDexUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}.${size}.jpg`;
+    return proxyImageUrl(mangaDexUrl);
+  }
+
   const direct = coverRel.attributes.url || coverRel.attributes.coverUrl;
   if (typeof direct === 'string' && direct) return proxyImageUrl(direct);
-
-  const fileName = coverRel.attributes.fileName;
   if (!fileName) return null;
 
   const mangaDexUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}.${size}.jpg`;

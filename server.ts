@@ -58,6 +58,15 @@ function queryParamsFromExpress(query: express.Request['query']): URLSearchParam
   return params;
 }
 
+// Express may decode bracket-style query keys such as translatedLanguage[]=en
+// into nested objects/strings before they reach req.query. MangaDex expects the
+// original repeated bracket parameters, so provider routes read the raw query
+// string instead of the parsed Express object.
+function queryParamsFromRequest(req: express.Request): URLSearchParams {
+  const index = req.originalUrl.indexOf('?');
+  return new URLSearchParams(index === -1 ? '' : req.originalUrl.slice(index + 1));
+}
+
 function providerForRequest(req: express.Request) {
   const requested = typeof req.query.provider === 'string' ? req.query.provider.trim() : '';
   if (!requested) {
@@ -602,7 +611,7 @@ app.get('/api/debug/mangafire/search', async (req, res) => {
 app.get('/api/provider/search', async (req, res) => {
   try {
     const provider = providerForRequest(req);
-    const params = queryParamsFromExpress(req.query);
+    const params = queryParamsFromRequest(req);
     params.delete('provider');
     const data = await provider.search(params);
     res.setHeader('Cache-Control', 'public, max-age=300');
@@ -661,7 +670,7 @@ app.get('/api/provider/manga/:id', async (req, res) => {
 app.get('/api/provider/manga/:id/chapters', async (req, res) => {
   try {
     const provider = providerForRequest(req);
-    const params = queryParamsFromExpress(req.query);
+    const params = queryParamsFromRequest(req);
     params.delete('provider');
     const data = await provider.getChapters(req.params.id, params);
     res.setHeader('Cache-Control', 'public, max-age=180');
@@ -840,13 +849,29 @@ app.get('/api/image-proxy', async (req, res) => {
     const providerHeaders = provider.getImageRequestHeaders
       ? provider.getImageRequestHeaders(parsed)
       : {};
-    const response = await fetch(imageUrl, {
+    let response = await fetch(imageUrl, {
       headers: {
         'User-Agent': 'KindleVoyageMangaReader/3.1 (image proxy)',
         Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
         ...providerHeaders,
       },
     });
+
+    // MangaDex normally exposes .256.jpg/.512.jpg cover thumbnails. If a
+    // particular cover has no generated thumbnail, retry the original cover
+    // file so Kindle can still receive it through the JPEG normalization path.
+    if (!response.ok && provider.key === 'mangadex' && parsed.hostname.toLowerCase() === 'uploads.mangadex.org') {
+      const fallbackUrl = imageUrl.replace(/\.(?:256|512)\.jpg(?:\?.*)?$/i, '');
+      if (fallbackUrl !== imageUrl) {
+        response = await fetch(fallbackUrl, {
+          headers: {
+            'User-Agent': 'KindleVoyageMangaReader/3.1 (image proxy)',
+            Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
+            ...providerHeaders,
+          },
+        });
+      }
+    }
 
     if (!response.ok) {
       return res.status(response.status).send('Image fetch failed');

@@ -13,8 +13,18 @@ function normalizeMangaDexManga(manga: any): any {
   const cover = manga.relationships.find((rel: any) => rel && rel.type === 'cover_art');
   const fileName = cover && cover.attributes ? cover.attributes.fileName : '';
   if (fileName) {
-    const directUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}`;
-    cover.attributes = { ...cover.attributes, url: directUrl, coverUrl: directUrl };
+    const originalUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}`;
+    // MangaDex provides JPEG thumbnails by appending .256.jpg / .512.jpg to
+    // the original cover filename. Prefer those for Kindle/browser cards so
+    // the client never has to decode the source cover format.
+    cover.attributes = {
+      ...cover.attributes,
+      originalUrl,
+      url: `${originalUrl}.512.jpg`,
+      coverUrl: `${originalUrl}.512.jpg`,
+      thumbnail256: `${originalUrl}.256.jpg`,
+      thumbnail512: `${originalUrl}.512.jpg`,
+    };
   }
   return manga;
 }
@@ -72,9 +82,24 @@ export class MangaDexProvider implements MangaProvider {
 
   async getChapters(mangaId: string, params: URLSearchParams): Promise<ProviderListResponse> {
     const query = new URLSearchParams(params);
+
+    // Accept both the correct bracket form and the form produced by some
+    // Express query parsers, then always send MangaDex an actual array.
+    const translatedLanguages = Array.from(new Set([
+      ...query.getAll('translatedLanguage[]'),
+      ...query.getAll('translatedLanguage'),
+    ].map((value) => value.trim()).filter(Boolean)));
+    query.delete('translatedLanguage[]');
+    query.delete('translatedLanguage');
+    translatedLanguages.forEach((language) => query.append('translatedLanguage[]', language));
+
     if (!query.has('limit')) query.set('limit', '100');
     if (!query.has('offset')) query.set('offset', '0');
-    if (!query.has('order[chapter]')) query.set('order[chapter]', 'asc');
+
+    // Keep chapter feeds consistent with MangaKatana/WeebCentral: newest/highest
+    // chapter first. Force this even if an older client still sends asc.
+    query.set('order[chapter]', 'desc');
+
     if (!query.has('contentRating[]')) {
       query.append('contentRating[]', 'safe');
       query.append('contentRating[]', 'suggestive');
@@ -82,8 +107,27 @@ export class MangaDexProvider implements MangaProvider {
     }
 
     const json = await this.requestJson(`/manga/${encodeURIComponent(mangaId)}/feed`, query);
+    const data = Array.isArray(json.data) ? [...json.data] : [];
+
+    // Defensive local ordering in case the upstream feed returns tied/unsorted
+    // releases. Numeric chapters sort high -> low; same-number releases sort by
+    // readable/publish date newest first.
+    data.sort((left: any, right: any) => {
+      const leftRaw = left?.attributes?.chapter;
+      const rightRaw = right?.attributes?.chapter;
+      const leftNumber = leftRaw == null || leftRaw === '' ? Number.NEGATIVE_INFINITY : Number.parseFloat(String(leftRaw));
+      const rightNumber = rightRaw == null || rightRaw === '' ? Number.NEGATIVE_INFINITY : Number.parseFloat(String(rightRaw));
+      const leftFinite = Number.isFinite(leftNumber);
+      const rightFinite = Number.isFinite(rightNumber);
+      if (leftFinite && rightFinite && leftNumber !== rightNumber) return rightNumber - leftNumber;
+      if (leftFinite !== rightFinite) return leftFinite ? -1 : 1;
+      const leftDate = Date.parse(left?.attributes?.readableAt || left?.attributes?.publishAt || left?.attributes?.createdAt || '') || 0;
+      const rightDate = Date.parse(right?.attributes?.readableAt || right?.attributes?.publishAt || right?.attributes?.createdAt || '') || 0;
+      return rightDate - leftDate;
+    });
+
     return {
-      data: json.data || [],
+      data,
       total: json.total || 0,
     };
   }

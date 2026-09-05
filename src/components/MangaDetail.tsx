@@ -18,20 +18,17 @@ interface MangaDetailProps {
   onSelectChapter: (chapterId: string, chapterList: Chapter[]) => void;
 }
 
-const MANGADEX_LANGUAGE_OPTIONS = [
-  { code: 'en', label: 'EN' },
-  { code: 'vi', label: 'VI' },
-  { code: 'ja', label: 'JP' },
-  { code: 'ko', label: 'KR' },
-  { code: 'zh-hans', label: 'ZH-CN' },
-  { code: 'zh-hant', label: 'ZH-TW' },
-  { code: 'es', label: 'ES' },
-  { code: 'es-la', label: 'ES-LA' },
-  { code: 'fr', label: 'FR' },
-  { code: 'pt-br', label: 'PT-BR' },
-  { code: 'id', label: 'ID' },
-  { code: 'th', label: 'TH' },
+const MANGADEX_LANGUAGE_LABELS: Record<string, string> = {
+  en: 'EN', vi: 'VI', ja: 'JP', ko: 'KR', zh: 'ZH', 'zh-hk': 'ZH-HK',
+  es: 'ES', 'es-la': 'ES-LA', fr: 'FR', 'pt-br': 'PT-BR', id: 'ID', th: 'TH',
+  'ja-ro': 'JA-RO', 'ko-ro': 'KO-RO', 'zh-ro': 'ZH-RO',
+};
+
+const MANGADEX_LANGUAGE_PREFERENCE = [
+  'en', 'vi', 'ja', 'ko', 'zh', 'zh-hk', 'es', 'es-la', 'fr', 'pt-br', 'id', 'th',
+  'ja-ro', 'ko-ro', 'zh-ro',
 ];
+
 
 const MANGADEX_LANGUAGE_STORAGE_KEY = 'kindle_mangadex_chapter_language_v37';
 
@@ -117,10 +114,19 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
     return chName.includes(chapterFilter.toLowerCase());
   });
 
-  const availableMangaDexLanguages = manga.attributes?.availableTranslatedLanguages || [];
-  const mangaDexLanguageOptions = MANGADEX_LANGUAGE_OPTIONS.filter((option) =>
-    availableMangaDexLanguages.length === 0 || availableMangaDexLanguages.indexOf(option.code) !== -1,
-  );
+  const availableMangaDexLanguages = (manga.attributes?.availableTranslatedLanguages || [])
+    .map((language) => String(language || '').toLowerCase())
+    .filter(Boolean);
+  const orderedMangaDexLanguages = availableMangaDexLanguages.length
+    ? [
+        ...MANGADEX_LANGUAGE_PREFERENCE.filter((language) => availableMangaDexLanguages.includes(language)),
+        ...availableMangaDexLanguages.filter((language) => !MANGADEX_LANGUAGE_PREFERENCE.includes(language)),
+      ]
+    : MANGADEX_LANGUAGE_PREFERENCE;
+  const mangaDexLanguageOptions = Array.from(new Set(orderedMangaDexLanguages)).map((code) => ({
+    code,
+    label: MANGADEX_LANGUAGE_LABELS[code] || code.toUpperCase(),
+  }));
 
   const chapterPageCount = chapterTotal > 0 ? Math.ceil(chapterTotal / CHAPTER_PAGE_SIZE) : 0;
   const chapterPageNumber = chapterTotal > 0 ? Math.floor(chapterOffset / CHAPTER_PAGE_SIZE) + 1 : 0;

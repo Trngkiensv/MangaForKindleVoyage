@@ -529,7 +529,8 @@
     function mangaDexLanguageLabel(code) {
         var labels = {
             en: "EN", vi: "VI", ja: "JP", ko: "KR",
-            "zh-hans": "ZH-CN", "zh-hant": "ZH-TW",
+            zh: "ZH", "zh-hk": "ZH-HK",
+            "ja-ro": "JA-RO", "ko-ro": "KO-RO", "zh-ro": "ZH-RO",
             es: "ES", "es-la": "ES-LA", fr: "FR",
             "pt-br": "PT-BR", id: "ID", th: "TH"
         };
@@ -539,7 +540,7 @@
     function getMangaDexLanguageOptions(manga) {
         var a = manga && manga.attributes ? manga.attributes : {};
         var available = a.availableTranslatedLanguages || [];
-        var preferred = ["en", "vi", "ja", "ko", "zh-hans", "zh-hant", "es", "es-la", "fr", "pt-br", "id", "th"];
+        var preferred = ["en", "vi", "ja", "ko", "zh", "zh-hk", "es", "es-la", "fr", "pt-br", "id", "th", "ja-ro", "ko-ro", "zh-ro"];
         var out = [], seen = {}, i, code;
         for (i = 0; i < preferred.length; i += 1) {
             code = preferred[i];
@@ -676,9 +677,18 @@
                 rel.type === "cover_art" &&
                 rel.attributes
             ) {
+                fileName = rel.attributes.fileName;
+                if (state.mangaProvider === "mangadex" && fileName) {
+                    direct =
+                        "https://uploads.mangadex.org/covers/" +
+                        manga.id +
+                        "/" +
+                        fileName +
+                        ".256.jpg";
+                    return providerUrl("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct));
+                }
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";
                 if (direct) return providerUrl("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct));
-                fileName = rel.attributes.fileName;
                 if (!fileName) return "";
                 direct =
                     "https://uploads.mangadex.org/covers/" +
