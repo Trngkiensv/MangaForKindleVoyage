@@ -63,10 +63,74 @@ function extractImageFromHtml(html: string): string {
   return '';
 }
 
+function cleanDescriptionText(value: string): string {
+  return String(value || '')
+    .replace(/^\s*Description\s*/i, '')
+    .replace(/^\s*(?:Bookmark|Read offline)\s*/i, '')
+    .trim();
+}
+
 function extractDescription(html: string): string {
+  // MangaKatana's detail layout currently keeps the synopsis in the .info
+  // section under a visible "Description" label. Older layouts used generic
+  // summary/description classes, so keep those selectors first.
+  const classCandidates = [
+    'summary',
+    'description',
+    'manga-description',
+    'manga_description',
+    'book-description',
+    'book_description',
+    'single-book-description',
+    'single_book_description',
+  ];
+  for (const className of classCandidates) {
+    const text = cleanDescriptionText(firstClassText(html, className));
+    if (text && text.length > 20) return text;
+  }
+
+  // ID-based variants used by several MangaKatana templates.
+  const idRegex = /<([a-z0-9:-]+)\b[^>]*\bid\s*=\s*(["'])(?:description|manga[_-]?description|book[_-]?description|single[_-]?book[_-]?description)\2[^>]*>([\s\S]*?)<\/\1>/gi;
+  let idMatch: RegExpExecArray | null;
+  while ((idMatch = idRegex.exec(html))) {
+    const text = cleanDescriptionText(stripTags(idMatch[3]));
+    if (text && text.length > 20) return text;
+  }
+
+  // Current MangaKatana pages expose a literal Description heading. Rather
+  // than consuming the whole page, examine only the block after that heading
+  // and stop before the chapter list / scripts. This avoids pulling chapter
+  // labels into the synopsis.
+  const marker = /<([a-z0-9:-]+)\b[^>]*>\s*Description\s*<\/\1>/i.exec(html);
+  if (marker && typeof marker.index === 'number') {
+    let tail = html.slice(marker.index + marker[0].length);
+    const stopPatterns = [
+      /<[^>]+class\s*=\s*(["'])[^"']*\bchapters\b[^"']*\1/i,
+      /<[^>]+id\s*=\s*(["'])[^"']*chapter[^"']*\1/i,
+      /<script\b/i,
+      /<h[1-6]\b[^>]*>\s*Chapters?\s*<\/h[1-6]>/i,
+    ];
+    let stop = tail.length;
+    for (const pattern of stopPatterns) {
+      const found = pattern.exec(tail);
+      if (found && found.index < stop) stop = found.index;
+    }
+    tail = tail.slice(0, Math.min(stop, 12000));
+
+    // Prefer the first meaningful paragraph. If the template uses divs only,
+    // fall back to the cleaned text from this tightly scoped region.
+    const paragraphRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi;
+    let paragraph: RegExpExecArray | null;
+    while ((paragraph = paragraphRegex.exec(tail))) {
+      const text = cleanDescriptionText(stripTags(paragraph[1]));
+      if (text && text.length > 20) return text;
+    }
+    const fallback = cleanDescriptionText(stripTags(tail));
+    if (fallback.length > 20) return fallback;
+  }
+
   const meta = firstMeta(html, 'description') || firstMeta(html, 'og:description');
-  const summary = firstClassText(html, 'summary') || firstClassText(html, 'description');
-  return summary || meta || '';
+  return meta || '';
 }
 
 function parseStatus(html: string): string {

@@ -153,7 +153,16 @@ export class MangaFireProvider implements MangaProvider {
       },
     });
     const body = await response.text();
-    if (!response.ok) throw new Error(`MangaFire returned HTTP ${response.status}: ${body.slice(0, 240)}`);
+    if (!response.ok) {
+      if (response.status === 403 && /(?:invalid|missing)\s+token|captcha_required/i.test(body)) {
+        const error: any = new Error(
+          'MangaFire rejected the current API token. MangaFire v3 now uses session-bound request tokens, so the old static VRF signer is no longer accepted by the upstream API.',
+        );
+        error.statusCode = 503;
+        throw error;
+      }
+      throw new Error(`MangaFire returned HTTP ${response.status}: ${body.slice(0, 240)}`);
+    }
     try {
       return JSON.parse(body);
     } catch (_error) {

@@ -18,6 +18,23 @@ interface MangaDetailProps {
   onSelectChapter: (chapterId: string, chapterList: Chapter[]) => void;
 }
 
+const MANGADEX_LANGUAGE_OPTIONS = [
+  { code: 'en', label: 'EN' },
+  { code: 'vi', label: 'VI' },
+  { code: 'ja', label: 'JP' },
+  { code: 'ko', label: 'KR' },
+  { code: 'zh-hans', label: 'ZH-CN' },
+  { code: 'zh-hant', label: 'ZH-TW' },
+  { code: 'es', label: 'ES' },
+  { code: 'es-la', label: 'ES-LA' },
+  { code: 'fr', label: 'FR' },
+  { code: 'pt-br', label: 'PT-BR' },
+  { code: 'id', label: 'ID' },
+  { code: 'th', label: 'TH' },
+];
+
+const MANGADEX_LANGUAGE_STORAGE_KEY = 'kindle_mangadex_chapter_language_v37';
+
 export const MangaDetail: React.FC<MangaDetailProps> = ({
   manga,
   settings,
@@ -28,6 +45,7 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
   const coverUrl = getCoverUrl(manga, '512');
   const title = getMangaTitle(manga, settings.preferredLanguages[0] || 'en');
   const description = getMangaDescription(manga, settings.preferredLanguages[0] || 'en');
+  const isMangaDex = getActiveProvider() === 'mangadex';
 
   const [bookmarked, setBookmarked] = useState<boolean>(false);
   const [historyItem, setHistoryItem] = useState<ReadingHistoryItem | null>(null);
@@ -40,6 +58,7 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
   const [loadingFeed, setLoadingFeed] = useState<boolean>(true);
   const [feedError, setFeedError] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState<string>('');
+  const [mangaDexLanguage, setMangaDexLanguage] = useState<string>('en');
 
   useEffect(() => {
     setBookmarked(isBookmarked(getActiveProvider(), manga.id));
@@ -47,14 +66,27 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
   }, [manga.id]);
 
   useEffect(() => {
-    loadChapters(0);
+    let initialLanguage = 'en';
+    if (isMangaDex) {
+      try {
+        const stored = window.localStorage.getItem(MANGADEX_LANGUAGE_STORAGE_KEY);
+        if (stored) initialLanguage = stored;
+      } catch (_error) {}
+      const available = manga.attributes?.availableTranslatedLanguages || [];
+      if (available.length > 0 && available.indexOf(initialLanguage) === -1) {
+        const preferred = settings.preferredLanguages.find((lang) => available.indexOf(lang) !== -1);
+        initialLanguage = preferred || available[0] || 'en';
+      }
+      setMangaDexLanguage(initialLanguage);
+    }
+    loadChapters(0, initialLanguage);
   }, [manga.id]);
 
-  const loadChapters = async (offset: number = 0) => {
+  const loadChapters = async (offset: number = 0, language: string = mangaDexLanguage) => {
     setLoadingFeed(true);
     setFeedError(null);
     try {
-      const result = await getMangaFeed(manga.id, [], CHAPTER_PAGE_SIZE, offset);
+      const result = await getMangaFeed(manga.id, isMangaDex ? [language] : [], CHAPTER_PAGE_SIZE, offset);
       setChapters(result.data);
       setChapterTotal(result.total);
       setChapterOffset(offset);
@@ -64,6 +96,13 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
     } finally {
       setLoadingFeed(false);
     }
+  };
+
+  const selectMangaDexLanguage = (language: string) => {
+    if (!isMangaDex || loadingFeed || language === mangaDexLanguage) return;
+    setMangaDexLanguage(language);
+    try { window.localStorage.setItem(MANGADEX_LANGUAGE_STORAGE_KEY, language); } catch (_error) {}
+    loadChapters(0, language);
   };
 
   const handleBookmarkToggle = () => {
@@ -77,6 +116,11 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
     const chName = formatChapterName(ch).toLowerCase();
     return chName.includes(chapterFilter.toLowerCase());
   });
+
+  const availableMangaDexLanguages = manga.attributes?.availableTranslatedLanguages || [];
+  const mangaDexLanguageOptions = MANGADEX_LANGUAGE_OPTIONS.filter((option) =>
+    availableMangaDexLanguages.length === 0 || availableMangaDexLanguages.indexOf(option.code) !== -1,
+  );
 
   const chapterPageCount = chapterTotal > 0 ? Math.ceil(chapterTotal / CHAPTER_PAGE_SIZE) : 0;
   const chapterPageNumber = chapterTotal > 0 ? Math.floor(chapterOffset / CHAPTER_PAGE_SIZE) + 1 : 0;
@@ -246,6 +290,29 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
           </h2>
         </div>
 
+        {isMangaDex && (
+          <div className={`mb-4 p-2 ${isEink ? 'border-2 border-black' : 'border border-stone-700'}`}>
+            <div className="text-[10px] font-black uppercase mb-2">Chapter language</div>
+            <div className="flex flex-wrap gap-2">
+              {mangaDexLanguageOptions.map((option) => (
+                <button
+                  key={option.code}
+                  type="button"
+                  onClick={() => selectMangaDexLanguage(option.code)}
+                  disabled={loadingFeed}
+                  className={`px-2 py-1 text-xs font-black border-2 cursor-pointer ${
+                    option.code === mangaDexLanguage
+                      ? isEink ? 'bg-black text-white border-black' : 'bg-amber-600 text-white border-amber-500'
+                      : isEink ? 'bg-white text-black border-black' : 'bg-stone-800 text-stone-200 border-stone-600'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Search Chapter filter */}
         <div className="mb-4">
           <div className="relative">
@@ -329,6 +396,7 @@ export const MangaDetail: React.FC<MangaDetailProps> = ({
                     </span>
                     <span className={`text-[10px] block ${isEink ? 'text-stone-700' : 'text-stone-400'}`}>
                       {ch.attributes.publishAt ? new Date(ch.attributes.publishAt).toLocaleDateString() : ''}
+                      {isMangaDex && (ch.attributes as any).translatedLanguage ? ` · ${String((ch.attributes as any).translatedLanguage).toUpperCase()}` : ''}
                     </span>
                   </div>
 

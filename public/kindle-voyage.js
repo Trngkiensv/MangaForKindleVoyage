@@ -9,6 +9,7 @@
         currentManga: null,
         mangaProvider: "mangakatana",
         mangaProviderPreferenceStored: false,
+        mangaDexLanguage: "en",
         chapters: [],
         currentChapter: null,
         currentChapterId: "",
@@ -279,6 +280,8 @@
             state.mangaProvider = s.mangaProvider;
             state.mangaProviderPreferenceStored = true;
         }
+        if (s.mangaDexLanguage && /^[a-z]{2}(?:-[a-z]{2,4})?$/i.test(s.mangaDexLanguage))
+            state.mangaDexLanguage = String(s.mangaDexLanguage).toLowerCase();
         // Translation is intentionally OFF on every fresh app start/session.
         // Do not restore an old VI ON value from localStorage: this prevents
         // OCR.Space / Cloudflare usage until the reader explicitly enables VI.
@@ -295,7 +298,8 @@
             bookMargin: state.bookMargin,
             bookLinesPerPage: state.bookLinesPerPage,
             bookFont: state.bookFont,
-            mangaProvider: state.mangaProvider
+            mangaProvider: state.mangaProvider,
+            mangaDexLanguage: state.mangaDexLanguage
         });
     }
 
@@ -520,6 +524,75 @@
         if (key === "mangakatana") return "MangaKatana";
         if (key === "mangadex") return "MangaDex";
         return "Unknown source";
+    }
+
+    function mangaDexLanguageLabel(code) {
+        var labels = {
+            en: "EN", vi: "VI", ja: "JP", ko: "KR",
+            "zh-hans": "ZH-CN", "zh-hant": "ZH-TW",
+            es: "ES", "es-la": "ES-LA", fr: "FR",
+            "pt-br": "PT-BR", id: "ID", th: "TH"
+        };
+        return labels[code] || String(code || "").toUpperCase();
+    }
+
+    function getMangaDexLanguageOptions(manga) {
+        var a = manga && manga.attributes ? manga.attributes : {};
+        var available = a.availableTranslatedLanguages || [];
+        var preferred = ["en", "vi", "ja", "ko", "zh-hans", "zh-hant", "es", "es-la", "fr", "pt-br", "id", "th"];
+        var out = [], seen = {}, i, code;
+        for (i = 0; i < preferred.length; i += 1) {
+            code = preferred[i];
+            if ((!available.length || available.indexOf(code) !== -1) && !seen[code]) {
+                seen[code] = true;
+                out.push(code);
+            }
+        }
+        for (i = 0; i < available.length; i += 1) {
+            code = String(available[i] || "").toLowerCase();
+            if (code && !seen[code]) { seen[code] = true; out.push(code); }
+        }
+        return out;
+    }
+
+    function ensureMangaDexLanguage(manga) {
+        if (state.mangaProvider !== "mangadex") return;
+        var options = getMangaDexLanguageOptions(manga);
+        if (options.length && options.indexOf(state.mangaDexLanguage) === -1) {
+            state.mangaDexLanguage = options.indexOf("en") !== -1 ? "en" : options[0];
+            saveReaderSettings();
+        }
+    }
+
+    function renderMangaDexLanguageButtons(manga) {
+        if (state.mangaProvider !== "mangadex") return "";
+        var options = getMangaDexLanguageOptions(manga);
+        var html = '<div class="chapter-language"><b>Language:</b> ';
+        var i, code, active;
+        for (i = 0; i < options.length; i += 1) {
+            code = options[i];
+            active = code === state.mangaDexLanguage;
+            html += '<button type="button" class="btn mangadex-lang' + (active ? ' provider-active' : '') + '" data-lang="' + escapeHtml(code) + '">' + escapeHtml(mangaDexLanguageLabel(code)) + '</button>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function bindMangaDexLanguageButtons() {
+        if (state.mangaProvider !== "mangadex") return;
+        var buttons = document.getElementsByTagName("button");
+        var i, b;
+        for (i = 0; i < buttons.length; i += 1) {
+            b = buttons[i];
+            if ((" " + b.className + " ").indexOf(" mangadex-lang ") === -1) continue;
+            b.onclick = function () {
+                var lang = this.getAttribute("data-lang") || "en";
+                if (lang === state.mangaDexLanguage || state.chapterLoading) return;
+                state.mangaDexLanguage = lang;
+                saveReaderSettings();
+                loadChapters(state.currentManga.id, 0);
+            };
+        }
     }
 
     function providerUrl(url, provider) {
@@ -900,6 +973,7 @@
         state.currentMangaSaved = !!state.savedMangaIds[savedStateKey(manga.id)];
         state.currentMangaSavedKnown = !!state.savedMangaKnown[savedStateKey(manga.id)];
         state.readChapterIds = {};
+        ensureMangaDexLanguage(manga);
         renderMangaDetail(manga, true);
         loadChapters(manga.id, 0);
         if (state.authUser) checkCurrentMangaSaved(manga);
@@ -958,6 +1032,7 @@
             "</button>";
         html +=
             '<button id="backHome" type="button" class="btn">Back home</button>';
+        html += renderMangaDexLanguageButtons(manga);
         html += '<div class="heading" style="margin-top:14px">Chapters</div>';
         if (loadingChapters) {
             html += '<div class="notice">Loading chapter page...</div>';
@@ -977,6 +1052,7 @@
         el("bookmarkCurrent").onclick = function () {
             toggleSaved(manga);
         };
+        bindMangaDexLanguageButtons();
         if (!loadingChapters) {
             bindChapterButtons();
             bindChapterPager();
@@ -998,15 +1074,17 @@
     }
 
     function chapterFeedUrl(mangaId, offset, limit) {
-        return (
+        var url =
             "/api/provider/manga/" +
             encodeURIComponent(mangaId) +
             "/chapters?limit=" +
             limit +
             "&offset=" +
             offset +
-            "&order%5Bchapter%5D=desc&contentRating%5B%5D=safe&contentRating%5B%5D=suggestive&contentRating%5B%5D=erotica&provider=" + encodeURIComponent(state.mangaProvider)
-        );
+            "&order%5Bchapter%5D=desc&contentRating%5B%5D=safe&contentRating%5B%5D=suggestive&contentRating%5B%5D=erotica";
+        if (state.mangaProvider === "mangadex" && state.mangaDexLanguage)
+            url += "&translatedLanguage%5B%5D=" + encodeURIComponent(state.mangaDexLanguage);
+        return url + "&provider=" + encodeURIComponent(state.mangaProvider);
     }
 
     function loadChapters(mangaId, offset) {

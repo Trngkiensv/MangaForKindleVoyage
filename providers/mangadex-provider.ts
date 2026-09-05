@@ -8,6 +8,17 @@ import type {
 const API_BASE = 'https://api.mangadex.org';
 const USER_AGENT = 'KindleVoyageMangaReader/3.1 (provider adapter)';
 
+function normalizeMangaDexManga(manga: any): any {
+  if (!manga || !manga.id || !Array.isArray(manga.relationships)) return manga;
+  const cover = manga.relationships.find((rel: any) => rel && rel.type === 'cover_art');
+  const fileName = cover && cover.attributes ? cover.attributes.fileName : '';
+  if (fileName) {
+    const directUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}`;
+    cover.attributes = { ...cover.attributes, url: directUrl, coverUrl: directUrl };
+  }
+  return manga;
+}
+
 export class MangaDexProvider implements MangaProvider {
   readonly key = 'mangadex';
   readonly displayName = 'MangaDex';
@@ -43,7 +54,7 @@ export class MangaDexProvider implements MangaProvider {
 
     const json = await this.requestJson('/manga', query);
     return {
-      data: json.data || [],
+      data: (json.data || []).map(normalizeMangaDexManga),
       total: json.total || 0,
       offset: json.offset || 0,
       limit: json.limit || Number(query.get('limit') || 20),
@@ -56,7 +67,7 @@ export class MangaDexProvider implements MangaProvider {
     query.append('includes[]', 'author');
     query.append('includes[]', 'artist');
     const json = await this.requestJson(`/manga/${encodeURIComponent(id)}`, query);
-    return json.data;
+    return normalizeMangaDexManga(json.data);
   }
 
   async getChapters(mangaId: string, params: URLSearchParams): Promise<ProviderListResponse> {
@@ -105,5 +116,13 @@ export class MangaDexProvider implements MangaProvider {
       url.protocol === 'https:' &&
       (host === 'uploads.mangadex.org' || host.endsWith('.mangadex.org') || host.endsWith('.mangadex.network'))
     );
+  }
+
+  getImageRequestHeaders(_url: URL): Record<string, string> {
+    return {
+      'User-Agent': 'Mozilla/5.0 (Linux; Kindle) AppleWebKit/537.36 Safari/537.36',
+      Referer: 'https://mangadex.org/',
+      'Accept-Language': 'en-US,en;q=0.8',
+    };
   }
 }

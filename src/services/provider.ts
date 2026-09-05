@@ -149,7 +149,7 @@ export async function getMangaById(id: string): Promise<Manga> {
 
 export async function getMangaFeed(
   mangaId: string,
-  _languages: string[] = [],
+  languages: string[] = [],
   limit: number = 100,
   offset: number = 0,
 ): Promise<{ data: Chapter[]; total: number }> {
@@ -160,6 +160,9 @@ export async function getMangaFeed(
   addPair(query, 'contentRating[]', 'safe');
   addPair(query, 'contentRating[]', 'suggestive');
   addPair(query, 'contentRating[]', 'erotica');
+  if (activeProvider === 'mangadex') {
+    languages.filter(Boolean).forEach((language) => addPair(query, 'translatedLanguage[]', language));
+  }
 
   const res = await fetch(
     providerUrl(`${API_BASE}/manga/${encodeURIComponent(mangaId)}/chapters?${buildQuery(query)}`),
