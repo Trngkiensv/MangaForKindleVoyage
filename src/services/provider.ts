@@ -193,11 +193,14 @@ export function getCoverUrl(manga: Manga, size: '256' | '512' = '256'): string |
 
   const fileName = coverRel.attributes.fileName;
 
-  // For MangaDex, prefer its generated JPEG thumbnail instead of the original
-  // cover file. This is smaller and much safer for old Kindle WebKit.
+  // MangaDex covers use a dedicated backend route. The server can retry the
+  // requested thumbnail, the other thumbnail size, and the original cover
+  // without exposing CDN quirks to the browser.
   if (activeProvider === 'mangadex' && fileName) {
-    const mangaDexUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}.${size}.jpg`;
-    return proxyImageUrl(mangaDexUrl);
+    return providerUrl(
+      `/api/mangadex-cover/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}?size=${size}`,
+      'mangadex',
+    );
   }
 
   const direct = coverRel.attributes.url || coverRel.attributes.coverUrl;

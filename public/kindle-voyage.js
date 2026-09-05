@@ -679,13 +679,13 @@
             ) {
                 fileName = rel.attributes.fileName;
                 if (state.mangaProvider === "mangadex" && fileName) {
-                    direct =
-                        "https://uploads.mangadex.org/covers/" +
-                        manga.id +
-                        "/" +
-                        fileName +
-                        ".256.jpg";
-                    return providerUrl("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct));
+                    return providerUrl(
+                        "/api/mangadex-cover/" +
+                            encodeURIComponent(manga.id) +
+                            "/" +
+                            encodeURIComponent(fileName) +
+                            "?size=256&kindle=cover"
+                    );
                 }
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";
                 if (direct) return providerUrl("/api/image-proxy?kindle=cover&url=" + encodeURIComponent(direct));

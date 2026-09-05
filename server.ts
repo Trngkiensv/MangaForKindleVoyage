@@ -822,6 +822,109 @@ app.get('/api/mangadex/*', async (req, res) => {
   }
 });
 
+// Dedicated MangaDex cover proxy. MangaDex cover thumbnails are generated from
+// the original cover filename and may occasionally be unavailable while the
+// original still exists. Keep the retry logic server-side so old Kindle clients
+// only receive one stable URL.
+app.get('/api/mangadex-cover/:mangaId/:fileName', async (req, res) => {
+  let provider: MangaProvider;
+  try {
+    provider = providerForRequest(req);
+  } catch (error: any) {
+    return res.status(providerErrorStatus(error, 400)).json({ error: error?.message || 'Invalid provider' });
+  }
+
+  if (provider.key !== 'mangadex') {
+    return res.status(400).send('MangaDex provider is required');
+  }
+
+  const mangaId = String(req.params.mangaId || '').trim();
+  const fileName = String(req.params.fileName || '').trim();
+  const requestedSize = String(req.query.size || '256') === '512' ? '512' : '256';
+  const alternateSize = requestedSize === '256' ? '512' : '256';
+  const kindleCover = String(req.query.kindle || '').toLowerCase() === 'cover';
+
+  if (!/^[0-9a-f-]{36}$/i.test(mangaId) || !fileName || /[\/]/.test(fileName)) {
+    return res.status(400).send('Invalid MangaDex cover parameters');
+  }
+
+  const baseUrl = `https://uploads.mangadex.org/covers/${mangaId}/${encodeURIComponent(fileName)}`;
+  const candidates = [
+    `${baseUrl}.${requestedSize}.jpg`,
+    `${baseUrl}.${alternateSize}.jpg`,
+    baseUrl,
+  ];
+
+  let lastStatus = 0;
+  let lastUrl = '';
+
+  for (const candidate of candidates) {
+    lastUrl = candidate;
+    try {
+      const parsed = new URL(candidate);
+      if (!provider.isAllowedImageUrl(parsed)) continue;
+
+      // First try a neutral browser-like request. If the CDN rejects it, retry
+      // once with the provider-specific headers.
+      const headerAttempts: Array<Record<string, string>> = [
+        {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        },
+        {
+          'User-Agent': 'KindleVoyageMangaReader/3.1 (cover proxy)',
+          Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
+          ...(provider.getImageRequestHeaders ? provider.getImageRequestHeaders(parsed) : {}),
+        },
+      ];
+
+      for (const headers of headerAttempts) {
+        const response = await fetch(candidate, { headers });
+        lastStatus = response.status;
+        if (!response.ok) continue;
+
+        const contentType = response.headers.get('content-type') || 'application/octet-stream';
+        if (!contentType.toLowerCase().startsWith('image/')) {
+          lastStatus = 502;
+          continue;
+        }
+
+        const sourceBuffer = Buffer.from(await response.arrayBuffer());
+        if (!sourceBuffer.length) {
+          lastStatus = 502;
+          continue;
+        }
+
+        // Normalize Kindle covers to baseline JPEG. For normal browsers keep the
+        // upstream bytes so no unnecessary image processing is required.
+        if (kindleCover) {
+          try {
+            const jpegCover = await sharp(sourceBuffer, { failOn: 'none' })
+              .rotate()
+              .resize({ width: 320, withoutEnlargement: true })
+              .jpeg({ quality: 80, progressive: false, chromaSubsampling: '4:2:0' })
+              .toBuffer();
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.send(jpegCover);
+          } catch (coverError) {
+            console.error('MangaDex Kindle cover conversion error:', coverError);
+          }
+        }
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(sourceBuffer);
+      }
+    } catch (error) {
+      console.error('MangaDex cover candidate error:', candidate, error);
+    }
+  }
+
+  console.error('MangaDex cover fetch failed:', { mangaId, fileName, lastStatus, lastUrl });
+  return res.status(lastStatus >= 400 ? lastStatus : 502).send('MangaDex cover fetch failed');
+});
+
 // Image proxy: the Kindle talks HTTP to this PC; the PC downloads HTTPS images.
 // Host validation is delegated to the active provider so a future authorized scraper
 // can opt in only the exact CDN domains it is permitted to fetch.
