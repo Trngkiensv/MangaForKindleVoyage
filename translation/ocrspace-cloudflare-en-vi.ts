@@ -66,7 +66,7 @@ const TARGET_LANGUAGE = 'vi' as const;
 const OCR_SPACE_URL = 'https://api.ocr.space/parse/image';
 const DEFAULT_CF_MODEL = '@cf/qwen/qwen3-30b-a3b-fp8';
 const DEFAULT_CF_FALLBACK_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
-const CACHE_VERSION = 15;
+const CACHE_VERSION = 16;
 const MAX_REGIONS = 80;
 const FREE_OCR_MAX_BYTES = 950 * 1024;
 
@@ -448,13 +448,17 @@ export class EnglishVietnameseTranslationService {
     };
   }
 
-  private mangaSentenceSystemPrompt(): string {
+  private mangaPageSystemPrompt(): string {
     return [
-      'Translate exactly one English manga utterance into Vietnamese.',
-      'Translate literally and faithfully using only the supplied utterance.',
-      'Do not infer context from other speech bubbles, the rest of the page, speaker identity, gender, relationships, or unstated meaning.',
-      'Preserve names and proper nouns. Keep punctuation, emotion, profanity, and tone.',
-      'Return only the Vietnamese translation. Do not explain, add notes, or answer the utterance.',
+      'Translate English manga dialogue and narration into natural, faithful Vietnamese.',
+      'You receive multiple OCR regions from the SAME page in reading order. Translate every region separately and keep its id unchanged.',
+      'Use neighboring regions only to resolve conversational context, pronouns, ellipsis, idioms, short replies, and question polarity.',
+      'Do not merge regions, split regions, invent events, add explanations, or change who is speaking.',
+      'Preserve the intended meaning and conversational polarity rather than translating English negatives word-for-word.',
+      'For English negative questions such as "Won\'t it be boring?", produce the natural Vietnamese question meaning, such as "Không phải sẽ chán sao?" or an equivalent natural rendering.',
+      'For a short reply such as "Not at all!", use the preceding dialogue to decide whether it means "Không hề!", "Không đâu!", "Không có gì!", or another contextually correct Vietnamese reply.',
+      'Preserve names and proper nouns. Keep punctuation, emotion, profanity, hesitation, and tone. Use normal Vietnamese capitalization.',
+      'Return JSON only in exactly this shape: {"translations":[{"id":0,"translation":"..."}]}. Include one entry for every input id and nothing else.',
     ].join(' ');
   }
 
@@ -704,77 +708,185 @@ export class EnglishVietnameseTranslationService {
 
 
 
-  /** Translate one OCR utterance with zero page-level context. */
-  private async translateOneMangaRegion(sourceInput: string): Promise<string | null> {
-    const source = cleanText(sourceInput);
-    if (!source) return null;
+  private cleanModelTranslation(value: string): string {
+    return String(value || '')
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/^```(?:json|text)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+  }
 
+  private parsePageTranslations(rawInput: string, expectedCount: number): Array<string | null> {
+    const raw = this.cleanModelTranslation(rawInput);
+    if (!raw) return new Array(expectedCount).fill(null);
+
+    const candidates: string[] = [raw];
+    const objectStart = raw.indexOf('{');
+    const objectEnd = raw.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      candidates.push(raw.slice(objectStart, objectEnd + 1));
+    }
+    const arrayStart = raw.indexOf('[');
+    const arrayEnd = raw.lastIndexOf(']');
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      candidates.push(raw.slice(arrayStart, arrayEnd + 1));
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const parsed: any = JSON.parse(candidate);
+        const rows = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.translations)
+            ? parsed.translations
+            : Array.isArray(parsed?.regions)
+              ? parsed.regions
+              : null;
+        if (!rows) continue;
+
+        const output: Array<string | null> = new Array(expectedCount).fill(null);
+        rows.forEach((row: any, rowIndex: number) => {
+          const id = Number.isInteger(Number(row?.id)) ? Number(row.id) : rowIndex;
+          if (id < 0 || id >= expectedCount) return;
+          const text = cleanText(row?.translation ?? row?.translated ?? row?.text ?? '');
+          if (text) output[id] = text.slice(0, 1200);
+        });
+        if (output.some(Boolean)) return output;
+      } catch (_error) {}
+    }
+
+    return new Array(expectedCount).fill(null);
+  }
+
+  /**
+   * Translate one whole manga page while preserving one output per OCR region.
+   * Neighboring bubbles are context only; IDs keep the overlay mapping stable.
+   */
+  private async translateMangaPageWithContext(texts: string[]): Promise<Array<string | null>> {
+    if (!texts.length) return [];
+
+    const payload = texts.map((text, id) => ({ id, text }));
     const messages: Array<{ role: 'system' | 'user'; content: string }> = [
-      { role: 'system', content: this.mangaSentenceSystemPrompt() },
+      { role: 'system', content: this.mangaPageSystemPrompt() },
       {
         role: 'user',
-        content: `/no_think\nTranslate this utterance literally into Vietnamese. Use only this text; no page context:\n${source}`,
+        content:
+          '/no_think\nTranslate every manga region below into Vietnamese. ' +
+          'Use the other regions only as dialogue context. Return the required JSON object only.\n' +
+          JSON.stringify({ regions: payload }),
       },
     ];
-    const maxTokens = Math.max(128, Math.min(this.cloudflareMaxTokens, 96 + Math.ceil(source.length * 0.9)));
+    const sourceChars = texts.reduce((sum, text) => sum + text.length, 0);
+    const maxTokens = Math.max(512, Math.min(this.cloudflareMaxTokens, 320 + Math.ceil(sourceChars * 1.25)));
+
+    const runModel = async (model: string, jsonMode: boolean): Promise<Array<string | null>> => {
+      try {
+        const raw = await this.runCloudflareLlm(
+          messages,
+          maxTokens,
+          model,
+          jsonMode ? { type: 'json_object' } : undefined,
+        );
+        const parsed = this.parsePageTranslations(raw, texts.length);
+        return parsed.map((translation, index) => {
+          if (!translation) return null;
+          if (this.looksUntranslated(texts[index], translation) || this.looksLikeMetaResponse(texts[index], translation)) return null;
+          return translation;
+        });
+      } catch (error: any) {
+        console.warn(`Contextual manga page translation failed on ${model}: ${error?.message || error}`);
+        return new Array(texts.length).fill(null);
+      }
+    };
+
+    let output = await runModel(this.cloudflareModel, false);
+    const missingAfterPrimary = output.filter((value) => !value).length;
+
+    if (missingAfterPrimary && this.allowFallback) {
+      const fallback = await runModel(this.cloudflareFallbackModel, true);
+      output = output.map((value, index) => value || fallback[index] || null);
+    }
+
+    return output;
+  }
+
+  /**
+   * Fallback for a single missing region. It receives only a small neighboring
+   * context window and must translate the target region only.
+   */
+  private async translateOneMangaRegionWithContext(
+    sourceInput: string,
+    previousInput: string | undefined,
+    nextInput: string | undefined,
+  ): Promise<string | null> {
+    const source = cleanText(sourceInput);
+    if (!source) return null;
+    const previous = cleanText(previousInput || '');
+    const next = cleanText(nextInput || '');
+
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+      {
+        role: 'system',
+        content: [
+          'Translate TARGET English manga text into natural, faithful Vietnamese.',
+          'PREVIOUS and NEXT are context only. Never translate them in the answer.',
+          'Use context to resolve negative questions, short replies, idioms, pronouns, and ellipsis.',
+          'Preserve the target meaning and polarity. Return only the Vietnamese translation of TARGET.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: `/no_think\nPREVIOUS: ${previous || '(none)'}\nTARGET: ${source}\nNEXT: ${next || '(none)'}`,
+      },
+    ];
+    const maxTokens = Math.max(128, Math.min(this.cloudflareMaxTokens, 128 + Math.ceil(source.length * 1.0)));
 
     const runModel = async (model: string): Promise<string | null> => {
       try {
         let translated = await this.runCloudflareLlm(messages, maxTokens, model);
-        translated = translated
-          .replace(/<think>[\s\S]*?<\/think>/gi, '')
-          .replace(/^```(?:text)?\s*/i, '')
-          .replace(/\s*```$/i, '')
+        translated = this.cleanModelTranslation(translated)
           .replace(/^['"]|['"]$/g, '')
           .trim();
         if (!translated) return null;
         if (this.looksUntranslated(source, translated) || this.looksLikeMetaResponse(source, translated)) return null;
         return cleanText(translated).slice(0, 1200);
       } catch (error: any) {
-        console.warn(`Manga utterance translation failed on ${model}: ${error?.message || error}`);
+        console.warn(`Contextual manga region fallback failed on ${model}: ${error?.message || error}`);
         return null;
       }
     };
 
     let translated = await runModel(this.cloudflareModel);
-    if (!translated && this.allowFallback) {
-      translated = await runModel(this.cloudflareFallbackModel);
-    }
+    if (!translated && this.allowFallback) translated = await runModel(this.cloudflareFallbackModel);
     return translated;
   }
 
-  /**
-   * Translate every OCR region independently. No request contains another
-   * speech bubble from the same page, so the model cannot use page-level
-   * context to guess pronouns, relationships, tone, or omitted meaning.
-   *
-   * A tiny worker pool keeps latency reasonable without blasting Cloudflare
-   * with all bubbles simultaneously. Each request still contains exactly one
-   * utterance.
-   */
   private async translateEnglishToVietnamese(texts: string[]): Promise<Array<string | null>> {
     if (!texts.length) return [];
-    const output: Array<string | null> = new Array(texts.length).fill(null);
-    let nextIndex = 0;
-    const workerCount = Math.min(3, texts.length);
 
+    const output = await this.translateMangaPageWithContext(texts);
+    const missingIndices = output
+      .map((value, index) => (value ? -1 : index))
+      .filter((index) => index >= 0);
+
+    // Retry only missing IDs so a malformed page-level JSON response does not
+    // force a second full-page inference.
+    const workerCount = Math.min(2, missingIndices.length);
+    let cursor = 0;
     const worker = async (): Promise<void> => {
       while (true) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= texts.length) return;
-        output[index] = await this.translateOneMangaRegion(texts[index]);
+        const position = cursor;
+        cursor += 1;
+        if (position >= missingIndices.length) return;
+        const index = missingIndices[position];
+        output[index] = await this.translateOneMangaRegionWithContext(texts[index], texts[index - 1], texts[index + 1]);
       }
     };
-
     await Promise.all(new Array(workerCount).fill(null).map(() => worker()));
 
     const missing = output.filter((value) => !value).length;
     if (missing) {
-      console.warn(
-        `Translation incomplete: ${missing}/${texts.length} region(s) left in original artwork; ` +
-        `${this.allowFallback ? 'each failed utterance may use one fallback model call' : 'fallback/retry is disabled to save neurons'}.`,
-      );
+      console.warn(`Translation incomplete: ${missing}/${texts.length} region(s) left in original artwork.`);
     }
     return output;
   }
