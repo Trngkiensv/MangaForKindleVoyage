@@ -197,7 +197,7 @@ export function getCoverUrl(manga: Manga, size: '256' | '512' = '256'): string |
   // official direct thumbnail URL instead of forcing every cover through the
   // application server. This avoids a second network hop through Northflank.
   if (activeProvider === 'mangadex' && fileName) {
-    return `https://uploads.mangadex.org/covers/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}.${size}.jpg`;
+    return `https://uploads.mangadex.org/covers/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}.${size}.jpg?v=43`;
   }
 
   const direct = coverRel.attributes.url || coverRel.attributes.coverUrl;
@@ -216,7 +216,7 @@ export function getMangaDexCoverProxyFallback(
   const fileName = coverRel && coverRel.attributes ? coverRel.attributes.fileName : '';
   if (!fileName) return null;
   return providerUrl(
-    `/api/mangadex-cover/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}?size=${size}`,
+    `/api/mangadex-cover/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}?size=${size}&v=43`,
     'mangadex',
   );
 }

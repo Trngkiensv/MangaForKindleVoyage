@@ -679,12 +679,18 @@
             ) {
                 fileName = rel.attributes.fileName;
                 if (state.mangaProvider === "mangadex" && fileName) {
-                    return (
-                        "https://uploads.mangadex.org/covers/" +
+                    // Kindle Voyage's old WebKit cannot reliably suppress the
+                    // page Referer on cross-origin images. MangaDex may answer
+                    // hotlinked cover requests with its branded placeholder.
+                    // Use the dedicated server route, which fetches the cover
+                    // with Referer: https://mangadex.org/ and normalizes it to
+                    // baseline JPEG for the Kindle.
+                    return providerUrl(
+                        "/api/mangadex-cover/" +
                         encodeURIComponent(manga.id) +
                         "/" +
                         encodeURIComponent(fileName) +
-                        ".256.jpg"
+                        "?size=256&kindle=cover&v=43"
                     );
                 }
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";

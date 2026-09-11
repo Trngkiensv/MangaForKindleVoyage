@@ -864,17 +864,17 @@ app.get('/api/mangadex-cover/:mangaId/:fileName', async (req, res) => {
       const parsed = new URL(candidate);
       if (!provider.isAllowedImageUrl(parsed)) continue;
 
-      // First try a neutral browser-like request. If the CDN rejects it, retry
-      // once with the provider-specific headers.
+      // MangaDex returns a branded anti-hotlink placeholder with HTTP 200 for
+      // some requests that arrive without the expected site referer. A 200 alone
+      // therefore does not prove that the bytes are the real cover. Always use
+      // MangaDex's own referer on the dedicated cover route and never accept the
+      // neutral/hotlink request first.
       const headerAttempts: Array<Record<string, string>> = [
         {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
-          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        },
-        {
-          'User-Agent': 'KindleVoyageMangaReader/3.1 (cover proxy)',
-          Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5',
-          ...(provider.getImageRequestHeaders ? provider.getImageRequestHeaders(parsed) : {}),
+          'User-Agent': 'Mozilla/5.0 (Linux; Kindle) AppleWebKit/537.36 Safari/537.36',
+          Referer: 'https://mangadex.org/',
+          Accept: 'image/jpeg,image/png,image/webp,image/avif,image/*;q=0.8,*/*;q=0.5',
+          'Accept-Language': 'en-US,en;q=0.8',
         },
       ];
 
