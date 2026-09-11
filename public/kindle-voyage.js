@@ -679,12 +679,12 @@
             ) {
                 fileName = rel.attributes.fileName;
                 if (state.mangaProvider === "mangadex" && fileName) {
-                    return providerUrl(
-                        "/api/mangadex-cover/" +
-                            encodeURIComponent(manga.id) +
-                            "/" +
-                            encodeURIComponent(fileName) +
-                            "?size=256&kindle=cover"
+                    return (
+                        "https://uploads.mangadex.org/covers/" +
+                        encodeURIComponent(manga.id) +
+                        "/" +
+                        encodeURIComponent(fileName) +
+                        ".256.jpg"
                     );
                 }
                 direct = rel.attributes.url || rel.attributes.coverUrl || "";
@@ -702,6 +702,72 @@
         return "";
     }
 
+    function getCoverOriginal(manga) {
+        var rels = manga && manga.relationships ? manga.relationships : [];
+        var i, rel, fileName;
+        if (state.mangaProvider !== "mangadex") return "";
+        for (i = 0; i < rels.length; i += 1) {
+            rel = rels[i];
+            if (rel && rel.type === "cover_art" && rel.attributes) {
+                fileName = rel.attributes.fileName;
+                if (!fileName) return "";
+                return (
+                    "https://uploads.mangadex.org/covers/" +
+                    encodeURIComponent(manga.id) +
+                    "/" +
+                    encodeURIComponent(fileName)
+                );
+            }
+        }
+        return "";
+    }
+
+    function getCoverFallback(manga) {
+        var rels = manga && manga.relationships ? manga.relationships : [];
+        var i, rel, fileName;
+        if (state.mangaProvider !== "mangadex") return "";
+        for (i = 0; i < rels.length; i += 1) {
+            rel = rels[i];
+            if (rel && rel.type === "cover_art" && rel.attributes) {
+                fileName = rel.attributes.fileName;
+                if (!fileName) return "";
+                return providerUrl(
+                    "/api/mangadex-cover/" +
+                        encodeURIComponent(manga.id) +
+                        "/" +
+                        encodeURIComponent(fileName) +
+                        "?size=256&kindle=cover"
+                );
+            }
+        }
+        return "";
+    }
+
+    function bindCoverFallbacks() {
+        var imgs = document.getElementsByTagName("img");
+        var i, img;
+        for (i = 0; i < imgs.length; i += 1) {
+            img = imgs[i];
+            if ((" " + img.className + " ").indexOf(" cover ") === -1) continue;
+            if (!img.getAttribute("data-cover-original") && !img.getAttribute("data-cover-fallback")) continue;
+            img.onerror = function () {
+                var original = this.getAttribute("data-cover-original") || "";
+                var proxy = this.getAttribute("data-cover-fallback") || "";
+                if (original) {
+                    this.removeAttribute("data-cover-original");
+                    this.src = original;
+                    return;
+                }
+                if (proxy) {
+                    this.removeAttribute("data-cover-fallback");
+                    this.src = proxy;
+                    return;
+                }
+                this.style.display = "none";
+            };
+        }
+    }
+
     function mangaQuery(title) {
         var q = [];
         q.push("limit=20");
@@ -717,7 +783,7 @@
     function renderMangaList(items, heading) {
         leaveReaderMode();
         var html = '<div class="heading">' + escapeHtml(heading) + "</div>";
-        var i, m, cover, desc, title, known, saved;
+        var i, m, cover, coverOriginal, coverFallback, desc, title, known, saved;
         if (!items || !items.length) {
             showHtml(html + '<div class="notice">No manga found.</div>');
             return;
@@ -726,6 +792,8 @@
             m = items[i];
             title = getTitle(m);
             cover = getCover(m);
+            coverOriginal = getCoverOriginal(m);
+            coverFallback = getCoverFallback(m);
             desc = getDescription(m);
             known = !!state.savedMangaKnown[savedStateKey(m.id)];
             saved = !!state.savedMangaIds[savedStateKey(m.id)];
@@ -736,7 +804,9 @@
                 html +=
                     '<img class="cover" src="' +
                     escapeHtml(cover) +
-                    '" alt="Cover">';
+                    '"' + (coverOriginal ? ' data-cover-original="' + escapeHtml(coverOriginal) + '"' : '') +
+                    (coverFallback ? ' data-cover-fallback="' + escapeHtml(coverFallback) + '"' : '') +
+                    ' alt="Cover">';
             html += "</div>";
             html += '<div class="manga-info">';
             html += '<div class="manga-title">' + escapeHtml(title) + "</div>";
@@ -753,6 +823,7 @@
             html += '</div><div class="clear"></div></div>';
         }
         showHtml(html);
+        bindCoverFallbacks();
         bindMangaButtons(items);
         if (state.authUser) loadSavedStatesForMangaList(items);
     }
@@ -1022,6 +1093,8 @@
         var title = getTitle(manga);
         var desc = getDescription(manga);
         var cover = getCover(manga);
+        var coverOriginal = getCoverOriginal(manga);
+        var coverFallback = getCoverFallback(manga);
         var saved = !!(state.currentMangaSavedKnown && state.currentMangaSaved);
         var visibleChapters = getVisibleChapters();
         var total = state.chapterTotal || visibleChapters.length;
@@ -1034,7 +1107,9 @@
             html +=
                 '<div class="center"><img class="cover" style="width:160px" src="' +
                 escapeHtml(cover) +
-                '" alt="cover"></div>';
+                '"' + (coverOriginal ? ' data-cover-original="' + escapeHtml(coverOriginal) + '"' : '') +
+                (coverFallback ? ' data-cover-fallback="' + escapeHtml(coverFallback) + '"' : '') +
+                ' alt="cover"></div>';
         html += '<div class="description">' + escapeHtml(desc) + "</div>";
         html +=
             '<button id="bookmarkCurrent" type="button" class="btn btn-dark">' +
@@ -1058,6 +1133,7 @@
             if (pageCount > 1) html += renderChapterPager(pageNumber, pageCount);
         }
         showHtml(html);
+        bindCoverFallbacks();
         el("backHome").onclick = loadHome;
         el("bookmarkCurrent").onclick = function () {
             toggleSaved(manga);
