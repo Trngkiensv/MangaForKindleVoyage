@@ -54,9 +54,7 @@ function addPair(pairs: QueryPair[], key: string, value: string | number): void 
 
 export function proxyImageUrl(url: string, provider: MangaProviderKey = activeProvider): string {
   if (!url) return url;
-  // Already-proxied same-origin image routes must not be wrapped inside the
-  // generic proxy again. Older MangaDex bookmarks may contain this route.
-  if (url.indexOf('/api/image-proxy?') === 0 || url.indexOf('/api/mangadex-cover/') === 0) {
+  if (url.indexOf('/api/image-proxy?') === 0) {
     if (/[?&]provider=/.test(url)) return url;
     return providerUrl(url, provider);
   }
@@ -189,44 +187,17 @@ export async function getChapterPages(chapterId: string): Promise<ChapterPagesRe
  * Prefer a normalized direct cover URL supplied by a custom provider. Fall
  * back to MangaDex's cover-art convention for the built-in provider.
  */
-function mangaDexDirectCoverUrl(manga: Manga, size: '256' | '512'): string | null {
-  const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
-  const fileName = coverRel?.attributes?.fileName;
-  if (!fileName) return null;
-  return `https://uploads.mangadex.org/covers/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}.${size}.jpg`;
-}
-
-export function getMangaDexOriginalCoverUrl(manga: Manga): string | null {
-  if (activeProvider !== 'mangadex') return null;
-  const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
-  const fileName = coverRel?.attributes?.fileName;
-  if (!fileName) return null;
-  return `https://uploads.mangadex.org/covers/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}`;
-}
-
-export function getCoverFallbackUrl(manga: Manga, size: '256' | '512' = '256'): string | null {
-  if (activeProvider !== 'mangadex') return null;
-  const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
-  const fileName = coverRel?.attributes?.fileName;
-  if (!fileName) return null;
-  return providerUrl(
-    `/api/mangadex-cover/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}?size=${size}`,
-    'mangadex',
-  );
-}
-
 export function getCoverUrl(manga: Manga, size: '256' | '512' = '256'): string | null {
   const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
   if (!coverRel || !coverRel.attributes) return null;
 
   const fileName = coverRel.attributes.fileName;
 
-  // MangaDex already exposes public JPEG thumbnails. Use the official CDN
-  // directly first so cover rendering does not depend on the hosting
-  // provider's outbound access to uploads.mangadex.org. Components fall back
-  // to our server-side proxy only if the direct image fails.
+  // MangaDex cover CDN is directly reachable by normal browsers. Prefer the
+  // official direct thumbnail URL instead of forcing every cover through the
+  // application server. This avoids a second network hop through Northflank.
   if (activeProvider === 'mangadex' && fileName) {
-    return mangaDexDirectCoverUrl(manga, size);
+    return `https://uploads.mangadex.org/covers/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}.${size}.jpg`;
   }
 
   const direct = coverRel.attributes.url || coverRel.attributes.coverUrl;
@@ -235,6 +206,19 @@ export function getCoverUrl(manga: Manga, size: '256' | '512' = '256'): string |
 
   const mangaDexUrl = `https://uploads.mangadex.org/covers/${manga.id}/${fileName}.${size}.jpg`;
   return proxyImageUrl(mangaDexUrl);
+}
+
+export function getMangaDexCoverProxyFallback(
+  manga: Manga,
+  size: '256' | '512' = '256',
+): string | null {
+  const coverRel = manga.relationships && manga.relationships.find((r) => r.type === 'cover_art');
+  const fileName = coverRel && coverRel.attributes ? coverRel.attributes.fileName : '';
+  if (!fileName) return null;
+  return providerUrl(
+    `/api/mangadex-cover/${encodeURIComponent(manga.id)}/${encodeURIComponent(fileName)}?size=${size}`,
+    'mangadex',
+  );
 }
 
 export function getMangaTitle(manga: Manga, preferredLang: string = 'en'): string {

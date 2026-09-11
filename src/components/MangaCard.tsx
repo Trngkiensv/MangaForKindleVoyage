@@ -1,6 +1,6 @@
 import React from 'react';
 import { Manga, ReaderSettings } from '../types';
-import { getCoverFallbackUrl, getCoverUrl, getMangaDexOriginalCoverUrl, getMangaTitle } from '../services/provider';
+import { getActiveProvider, getCoverUrl, getMangaDexCoverProxyFallback, getMangaTitle } from '../services/provider';
 import { BookOpen, Star, User } from 'lucide-react';
 
 interface MangaCardProps {
@@ -12,8 +12,7 @@ interface MangaCardProps {
 export const MangaCard: React.FC<MangaCardProps> = ({ manga, settings, onSelectManga }) => {
   const isEink = settings.eInkMode;
   const coverUrl = getCoverUrl(manga, '256');
-  const coverOriginalUrl = getMangaDexOriginalCoverUrl(manga);
-  const coverFallbackUrl = getCoverFallbackUrl(manga, '256');
+  const coverFallbackUrl = getActiveProvider() === 'mangadex' ? getMangaDexCoverProxyFallback(manga, '256') : null;
   const title = getMangaTitle(manga, settings.preferredLanguages[0] || 'en');
 
   // Extract author/artist
@@ -51,19 +50,12 @@ export const MangaCard: React.FC<MangaCardProps> = ({ manga, settings, onSelectM
               referrerPolicy="no-referrer"
               className={`w-full h-full object-cover ${settings.grayscaleImages || isEink ? 'grayscale contrast-125' : ''}`}
               onError={(e) => {
-                const image = e.currentTarget;
-                const stage = image.dataset.coverFallbackStage || '0';
-                if (stage === '0' && coverOriginalUrl) {
-                  image.dataset.coverFallbackStage = '1';
-                  image.src = coverOriginalUrl;
+                const img = e.currentTarget;
+                if (coverFallbackUrl && img.src !== new URL(coverFallbackUrl, window.location.href).href) {
+                  img.src = coverFallbackUrl;
                   return;
                 }
-                if (stage !== '2' && coverFallbackUrl) {
-                  image.dataset.coverFallbackStage = '2';
-                  image.src = coverFallbackUrl;
-                  return;
-                }
-                image.style.display = 'none';
+                img.style.display = 'none';
               }}
             />
           ) : (
